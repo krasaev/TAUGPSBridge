@@ -32,12 +32,17 @@ import java.io.IOException
 
 class UsbSerialManager(
     context: Context,
-    onGpsDataUpdated: ((GpsData) -> Unit)? = null
+    onGpsDataUpdated: ((GpsData) -> Unit)? = null,
+    /** Вызывается при физическом подключении USB-устройства. */
+    private val onDeviceAttached: ((UsbDeviceInfo) -> Unit)? = null,
+    /** Вызывается при физическом отключении USB-устройства. */
+    private val onDeviceDetached: ((UsbDevice) -> Unit)? = null
 ) : BaseSerialManager(context, onGpsDataUpdated), SerialInputOutputManager.Listener {
 
     companion object {
         private const val TAG = "UsbSerialManager"
         const val ACTION_USB_PERMISSION = "ru.krasaev.taugpsbridge.USB_PERMISSION"
+        private const val ATTACH_SCAN_DELAY_MS = 300L
     }
 
     private val usbManager: UsbManager =
@@ -46,52 +51,19 @@ class UsbSerialManager(
     private var serialPort: UsbSerialPort? = null
     private var ioManager: SerialInputOutputManager? = null
 
-    private val _availableDevices = kotlinx.coroutines.flow.MutableStateFlow<List<UsbDeviceInfo>>(emptyList())
-    val availableDevices: kotlinx.coroutines.flow.StateFlow<List<UsbDeviceInfo>> = _availableDevices.asStateFlow()
+    private val _availableDevices = MutableStateFlow<List<UsbDeviceInfo>>(emptyList())
+    val availableDevices: StateFlow<List<UsbDeviceInfo>> = _availableDevices.asStateFlow()
 
     private var selectedDeviceName: String? = null
     private var selectedBaudRate: Int = 115200
 
     private val usbReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
             try {
                 when (intent?.action) {
-                    ACTION_USB_PERMISSION -> {
-                        synchronized(this) {
-                            val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                            } else {
-                                @Suppress("DEPRECATION")
-                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                            }
-                            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                            if (granted && device != null) {
-                                Log.i(TAG, "USB Permission granted for device: ${device.deviceName}")
-                                connectDevice(device, selectedBaudRate)
-                            } else {
-                                Log.w(TAG, "USB Permission denied for device: ${device?.deviceName}")
-                                _connectionStatus.value = ConnectionStatus.Error("Разрешение USB отклонено")
-                            }
-                            scanDevices()
-                        }
-                    }
-                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                        Log.i(TAG, "USB Device attached")
-                        scanDevices()
-                    }
-                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                        Log.i(TAG, "USB Device detached")
-                        scanDevices()
-                        val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                        }
-                        if (device != null && serialPort?.driver?.device?.deviceId == device.deviceId) {
-                            disconnect()
-                        }
-                    }
+                    ACTION_USB_PERMISSION -> handlePermissionResult(intent)
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> handleDeviceAttached(intent)
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> handleDeviceDetached(intent)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in usbReceiver", e)
@@ -107,24 +79,73 @@ class UsbSerialManager(
                 addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             }
             ContextCompat.registerReceiver(
-                context,
-                usbReceiver,
-                filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED
+                context, usbReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED
             )
-            scanDevices()
+            scope.launch { scanDevices() }
         } catch (e: Exception) {
             Log.e(TAG, "Error during UsbSerialManager init", e)
         }
     }
 
+    // ─── Обработчики broadcast ───
+
+    private fun handlePermissionResult(intent: Intent) {
+        synchronized(this) {
+            val device = intent.getUsbDeviceExtra()
+            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+            if (granted && device != null) {
+                Log.i(TAG, "USB permission granted: ${device.deviceName}")
+                connectDevice(device, selectedBaudRate)
+            } else {
+                _connectionStatus.value = ConnectionStatus.Error("Разрешение USB отклонено")
+            }
+            scope.launch { scanDevices() }
+        }
+    }
+
+    private fun handleDeviceAttached(intent: Intent) {
+        val device = intent.getUsbDeviceExtra()
+        Log.i(TAG, "USB attached: ${device?.deviceName}")
+
+        scope.launch {
+            delay(ATTACH_SCAN_DELAY_MS)  // дать системе время обновить deviceList
+            scanDevices()
+            if (device != null) {
+                onDeviceAttached?.invoke(buildDeviceInfo(device))
+            }
+        }
+    }
+
+    private fun handleDeviceDetached(intent: Intent) {
+        val device = intent.getUsbDeviceExtra()
+        Log.i(TAG, "USB detached: ${device?.deviceName}")
+        scanDevices()
+
+        if (device != null && serialPort?.driver?.device?.deviceId == device.deviceId) {
+            disconnect()
+        }
+        if (device != null) {
+            onDeviceDetached?.invoke(device)
+        }
+    }
+
+    private fun Intent.getUsbDeviceExtra(): UsbDevice? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        }
+
+    // ─── Prober / scan ───
+
     private fun getCustomProber(): UsbSerialProber {
         val customTable = ProbeTable().apply {
-            addProduct(0x1a86, 0x7523, Ch34xSerialDriver::class.java) // CH340
-            addProduct(0x1a86, 0x5523, Ch34xSerialDriver::class.java) // CH341
-            addProduct(0x10c4, 0xea60, Cp21xxSerialDriver::class.java) // CP2102
-            addProduct(0x0403, 0x6001, FtdiSerialDriver::class.java)   // FT232R
-            addProduct(0x067b, 0x2303, ProlificSerialDriver::class.java) // PL2303
+            addProduct(0x1a86, 0x7523, Ch34xSerialDriver::class.java)
+            addProduct(0x1a86, 0x5523, Ch34xSerialDriver::class.java)
+            addProduct(0x10c4, 0xea60, Cp21xxSerialDriver::class.java)
+            addProduct(0x0403, 0x6001, FtdiSerialDriver::class.java)
+            addProduct(0x067b, 0x2303, ProlificSerialDriver::class.java)
         }
         return UsbSerialProber(customTable)
     }
@@ -132,27 +153,7 @@ class UsbSerialManager(
     fun scanDevices(): List<UsbDeviceInfo> {
         return try {
             val deviceList = usbManager.deviceList
-            val customProber = getCustomProber()
-            val defaultProber = UsbSerialProber.getDefaultProber()
-
-            val list = mutableListOf<UsbDeviceInfo>()
-            for (device in deviceList.values) {
-                val driver = defaultProber.probeDevice(device) ?: customProber.probeDevice(device)
-                val portCount = driver?.ports?.size ?: 1
-                val hasPerm = usbManager.hasPermission(device)
-                list.add(
-                    UsbDeviceInfo(
-                        deviceName = device.deviceName,
-                        vendorId = device.vendorId,
-                        productId = device.productId,
-                        manufacturerName = device.manufacturerName,
-                        productName = device.productName,
-                        serialNumber = if (hasPerm) try { device.serialNumber } catch (e: Exception) { null } else null,
-                        portCount = portCount,
-                        hasPermission = hasPerm
-                    )
-                )
-            }
+            val list = deviceList.values.map { buildDeviceInfo(it) }
             _availableDevices.value = list
             list
         } catch (e: Exception) {
@@ -161,46 +162,73 @@ class UsbSerialManager(
         }
     }
 
+    private fun buildDeviceInfo(
+        device: UsbDevice,
+        defaultProber: UsbSerialProber = UsbSerialProber.getDefaultProber(),
+        customProber: UsbSerialProber = getCustomProber()
+    ): UsbDeviceInfo {
+        val driver = defaultProber.probeDevice(device) ?: customProber.probeDevice(device)
+        val portCount = driver?.ports?.size ?: 1
+        val hasPerm = usbManager.hasPermission(device)
+
+        return UsbDeviceInfo(
+            deviceName = device.deviceName,
+            vendorId = device.vendorId,
+            productId = device.productId,
+            manufacturerName = device.manufacturerName,
+            productName = device.productName,
+            serialNumber = if (hasPerm) {
+                try { device.serialNumber } catch (_: Exception) { null }
+            } else null,
+            portCount = portCount,
+            hasPermission = hasPerm
+        )
+    }
+
+    // ─── Connect ───
+
     fun connect(deviceName: String? = null, baudRate: Int = 115200) {
         selectedBaudRate = baudRate
         try {
             val deviceList = usbManager.deviceList
-
-            val targetDevice = if (deviceName != null) {
-                deviceList[deviceName] ?: deviceList.values.firstOrNull { it.deviceName == deviceName }
+            val target = if (deviceName != null) {
+                deviceList[deviceName]
+                    ?: deviceList.values.firstOrNull { it.deviceName == deviceName }
             } else {
                 deviceList.values.firstOrNull()
             }
 
-            if (targetDevice == null) {
+            if (target == null) {
                 _connectionStatus.value = ConnectionStatus.Error("USB устройство не найдено")
                 return
             }
+            selectedDeviceName = target.deviceName
 
-            selectedDeviceName = targetDevice.deviceName
-
-            if (!usbManager.hasPermission(targetDevice)) {
-                _connectionStatus.value = ConnectionStatus.Connecting
-                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                } else {
-                    PendingIntent.FLAG_UPDATE_CURRENT
-                }
-                val permissionIntent = PendingIntent.getBroadcast(
-                    context,
-                    0,
-                    Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
-                    flags
-                )
-                usbManager.requestPermission(targetDevice, permissionIntent)
+            if (!usbManager.hasPermission(target)) {
+                requestPermission(target)
                 return
             }
-
-            connectDevice(targetDevice, baudRate)
+            connectDevice(target, baudRate)
         } catch (e: Exception) {
             Log.e(TAG, "Error in connect()", e)
-            _connectionStatus.value = ConnectionStatus.Error("Ошибка подключения: ${e.message ?: "Unknown"}")
+            _connectionStatus.value =
+                ConnectionStatus.Error("Ошибка подключения: ${e.message ?: "Unknown"}")
         }
+    }
+
+    private fun requestPermission(device: UsbDevice) {
+        _connectionStatus.value = ConnectionStatus.Connecting
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val intent = PendingIntent.getBroadcast(
+            context, 0,
+            Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
+            flags
+        )
+        usbManager.requestPermission(device, intent)
     }
 
     private fun connectDevice(device: UsbDevice, baudRate: Int) {
@@ -215,25 +243,13 @@ class UsbSerialManager(
                         ?: CdcAcmSerialDriver(device)
 
                 val connection = usbManager.openDevice(device)
-                    ?: throw IOException("Не удалось открыть USB соединение (null connection)")
-
+                    ?: throw IOException("Не удалось открыть USB соединение")
                 val port = driver.ports.firstOrNull()
-                    ?: throw IOException("Не найден последовательный порт на USB устройстве")
+                    ?: throw IOException("Не найден последовательный порт")
 
                 port.open(connection)
-                port.setParameters(
-                    baudRate,
-                    8,
-                    UsbSerialPort.STOPBITS_1,
-                    UsbSerialPort.PARITY_NONE
-                )
-
-                try {
-                    port.dtr = true
-                    port.rts = true
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to set DTR/RTS", e)
-                }
+                port.setParameters(baudRate, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                try { port.dtr = true; port.rts = true } catch (_: Exception) { }
 
                 serialPort = port
                 nmeaParser.reset()
@@ -249,16 +265,16 @@ class UsbSerialManager(
 
                 val displayName = device.productName ?: device.deviceName
                 _connectionStatus.value = ConnectionStatus.Connected(displayName, baudRate)
-                emitLog("Подключено: $displayName (${baudRate} бод)")
+                emitLog("Подключено: $displayName ($baudRate бод)")
 
-                // Automatically send query for module version and antenna status
                 delay(150)
                 sendRawBytes(CMD_REQUEST_VERSION, "Запрос версии модуля")
                 delay(100)
                 sendRawBytes(CMD_ENABLE_ANTENNA, "Включение статуса антенны")
             } catch (e: Exception) {
                 Log.e(TAG, "Connection error", e)
-                _connectionStatus.value = ConnectionStatus.Error(e.message ?: "Ошибка подключения")
+                _connectionStatus.value =
+                    ConnectionStatus.Error(e.message ?: "Ошибка подключения")
                 emitLog("Ошибка подключения: ${e.message}")
                 disconnectInternal()
             }
@@ -277,36 +293,25 @@ class UsbSerialManager(
         try {
             ioManager?.listener = null
             ioManager?.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping ioManager", e)
-        } finally {
-            ioManager = null
-        }
+        } catch (_: Exception) { }
+        finally { ioManager = null }
 
-        try {
-            serialPort?.close()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error closing serialPort", e)
-        } finally {
-            serialPort = null
-        }
+        try { serialPort?.close() } catch (_: Exception) { }
+        finally { serialPort = null }
     }
+
+    // ─── Commands ───
 
     override fun sendCommand(command: String, lineEnding: String): Boolean {
         val port = serialPort ?: return false
         return try {
-            val trimmed = command.trim()
-            val hexBytes = parseHexCommand(trimmed)
-            val payload = if (hexBytes != null) {
-                hexBytes
-            } else {
-                (command + lineEnding).toByteArray(Charsets.US_ASCII)
-            }
+            val hexBytes = parseHexCommand(command.trim())
+            val payload = hexBytes ?: (command + lineEnding).toByteArray(Charsets.US_ASCII)
             port.write(payload, 1000)
             emitLog("TX: $command")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send command: $command", e)
+            Log.e(TAG, "Failed to send command", e)
             emitLog("TX Error: ${e.message}")
             false
         }
@@ -316,35 +321,32 @@ class UsbSerialManager(
         val port = serialPort ?: return false
         return try {
             port.write(bytes, 1000)
-            val hexString = bytes.joinToString(" ") { "%02X".format(it) }
-            emitLog("TX [$desc]: $hexString")
+            emitLog("TX [$desc]: ${bytes.joinToString(" ") { "%02X".format(it) }}")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send raw bytes: $desc", e)
+            Log.e(TAG, "Failed to send raw bytes", e)
             emitLog("TX Error ($desc): ${e.message}")
             false
         }
     }
 
-    override fun onNewData(data: ByteArray?) {
-        handleIncomingBytes(data)
-    }
+    // ─── SerialInputOutputManager.Listener ───
+
+    override fun onNewData(data: ByteArray?) = handleIncomingBytes(data)
 
     override fun onRunError(e: Exception?) {
         Log.e(TAG, "Serial IO run error", e)
         scope.launch {
-            _connectionStatus.value = ConnectionStatus.Error(e?.message ?: "Ошибка ввода-вывода")
+            _connectionStatus.value =
+                ConnectionStatus.Error(e?.message ?: "Ошибка ввода-вывода")
             emitLog("IO Error: ${e?.message}")
             disconnectInternal()
         }
     }
 
     override fun release() {
-        try {
-            context.unregisterReceiver(usbReceiver)
-        } catch (e: Exception) {
-            // Ignore
-        }
+        try { context.unregisterReceiver(usbReceiver) } catch (_: Exception) { }
         disconnectInternal()
+        super.release()
     }
 }

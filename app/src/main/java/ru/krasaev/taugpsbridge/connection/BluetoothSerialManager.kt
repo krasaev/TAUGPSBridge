@@ -28,58 +28,71 @@ import java.util.UUID
 
 class BluetoothSerialManager(
     context: Context,
-    onGpsDataUpdated: ((GpsData) -> Unit)? = null
+    onGpsDataUpdated: ((GpsData) -> Unit)? = null,
+    /** Вызывается, когда BT-устройство сопрягли или оно стало доступно. */
+    private val onBluetoothDeviceAvailable: ((BluetoothDeviceInfo) -> Unit)? = null,
+    /** Вызывается, когда Bluetooth-адаптер выключен. */
+    private val onBluetoothDisabled: (() -> Unit)? = null
 ) : BaseSerialManager(context, onGpsDataUpdated) {
 
     companion object {
         private const val TAG = "BluetoothSerialManager"
-        // Standard SPP UUID for Serial Communication (RFCOMM)
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     }
 
-    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+    private val bluetoothManager =
+        context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager?.adapter
 
     private val _availableDevices = MutableStateFlow<List<BluetoothDeviceInfo>>(emptyList())
     val availableDevices: StateFlow<List<BluetoothDeviceInfo>> = _availableDevices.asStateFlow()
 
-    @Volatile
-    private var socket: BluetoothSocket? = null
-    @Volatile
-    private var inputStream: InputStream? = null
-    @Volatile
-    private var outputStream: OutputStream? = null
+    @Volatile private var socket: BluetoothSocket? = null
+    @Volatile private var inputStream: InputStream? = null
+    @Volatile private var outputStream: OutputStream? = null
 
     private val btReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             when (intent?.action) {
                 BluetoothDevice.ACTION_FOUND -> {
-                    val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                    }
-                    if (device != null) {
-                        addDeviceToList(device)
-                    }
+                    intent.getBtDeviceExtra()?.let { addDeviceToList(it) }
                 }
+
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    val device = intent.getBtDeviceExtra()
+                    val newState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
                     scanDevices()
-                }
-                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                    val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+
+                    if (device != null && newState == BluetoothDevice.BOND_BONDED) {
+                        onBluetoothDeviceAvailable?.invoke(device.toInfo())
                     }
+                }
+
+                BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                    intent.getBtDeviceExtra()?.let {
+                        onBluetoothDeviceAvailable?.invoke(it.toInfo())
+                    }
+                }
+
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val device = intent.getBtDeviceExtra()
                     if (device != null && _connectionStatus.value is ConnectionStatus.Connected) {
-                        val currentName = (_connectionStatus.value as ConnectionStatus.Connected).deviceName
-                        if (currentName.contains(device.address) || currentName.contains(device.name ?: "")) {
+                        val connected = _connectionStatus.value as ConnectionStatus.Connected
+                        val matches = connected.deviceName.contains(device.address) ||
+                                (!device.name.isNullOrBlank() &&
+                                        connected.deviceName.contains(device.name))
+                        if (matches) {
                             emitLog("Bluetooth соединение разорвано удалённым устройством")
                             disconnect()
                         }
+                    }
+                }
+
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1)
+                    if (state == BluetoothAdapter.STATE_OFF) {
+                        onBluetoothDisabled?.invoke()
+                        disconnect()
                     }
                 }
             }
@@ -90,60 +103,66 @@ class BluetoothSerialManager(
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
         }
-        try {
-            context.registerReceiver(btReceiver, filter)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to register BT receiver", e)
+        try { context.registerReceiver(btReceiver, filter) }
+        catch (e: Exception) { Log.w(TAG, "Failed to register BT receiver", e) }
+    }
+
+    // ─── Утилиты ───
+
+    private fun Intent.getBtDeviceExtra(): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
+
+    @SuppressLint("MissingPermission")
+    private fun BluetoothDevice.toInfo(): BluetoothDeviceInfo {
+        val name = try { this.name ?: "" } catch (_: SecurityException) { "" }
+        return BluetoothDeviceInfo(
+            name = name,
+            address = address ?: "",
+            isBonded = bondState == BluetoothDevice.BOND_BONDED
+        )
     }
 
     @SuppressLint("MissingPermission")
     private fun addDeviceToList(device: BluetoothDevice) {
-        val name = try { device.name ?: "" } catch (e: SecurityException) { "" }
-        val address = device.address ?: return
-        val isBonded = device.bondState == BluetoothDevice.BOND_BONDED
-        val info = BluetoothDeviceInfo(name = name, address = address, isBonded = isBonded)
+        val info = device.toInfo()
+        if (info.address.isBlank()) return
 
-        val currentList = _availableDevices.value.toMutableList()
-        val existingIndex = currentList.indexOfFirst { it.address == address }
-        if (existingIndex >= 0) {
-            currentList[existingIndex] = info
-        } else {
-            currentList.add(info)
-        }
-        _availableDevices.value = currentList
+        val list = _availableDevices.value.toMutableList()
+        val idx = list.indexOfFirst { it.address == info.address }
+        if (idx >= 0) list[idx] = info else list.add(info)
+        _availableDevices.value = list
     }
 
     @SuppressLint("MissingPermission")
     fun scanDevices(): List<BluetoothDeviceInfo> {
         val list = mutableListOf<BluetoothDeviceInfo>()
-        if (bluetoothAdapter == null) {
+        val adapter = bluetoothAdapter ?: run {
             _availableDevices.value = emptyList()
             return emptyList()
         }
 
         try {
-            val paired = bluetoothAdapter.bondedDevices
-            paired?.forEach { dev ->
-                val name = try { dev.name ?: "" } catch (e: Exception) { "" }
-                val address = dev.address ?: ""
-                if (address.isNotBlank()) {
-                    list.add(BluetoothDeviceInfo(name = name, address = address, isBonded = true))
-                }
+            adapter.bondedDevices?.forEach { dev ->
+                if (!dev.address.isNullOrBlank()) list.add(dev.toInfo())
             }
         } catch (e: SecurityException) {
-            Log.w(TAG, "Bluetooth permissions not granted for bonded devices", e)
+            Log.w(TAG, "BT permissions not granted for bonded devices", e)
         }
 
         try {
-            if (bluetoothAdapter.isDiscovering) {
-                bluetoothAdapter.cancelDiscovery()
-            }
-            bluetoothAdapter.startDiscovery()
+            if (adapter.isDiscovering) adapter.cancelDiscovery()
+            adapter.startDiscovery()
         } catch (e: SecurityException) {
-            Log.w(TAG, "Bluetooth permissions not granted for startDiscovery", e)
+            Log.w(TAG, "BT permissions not granted for startDiscovery", e)
         }
 
         _availableDevices.value = list
@@ -151,45 +170,47 @@ class BluetoothSerialManager(
     }
 
     @SuppressLint("MissingPermission")
+    fun isDeviceBonded(address: String): Boolean {
+        val adapter = bluetoothAdapter ?: return false
+        return try {
+            adapter.bondedDevices?.any { it.address.equals(address, true) } == true
+        } catch (_: SecurityException) { false }
+    }
+
+    @SuppressLint("MissingPermission")
     fun connect(address: String) {
         scope.launch {
-            if (bluetoothAdapter == null) {
+            val adapter = bluetoothAdapter
+            if (adapter == null) {
                 _connectionStatus.value = ConnectionStatus.Error("Bluetooth адаптер не найден")
                 emitLog("Ошибка: Bluetooth адаптер недоступен")
                 return@launch
             }
-
-            if (!bluetoothAdapter.isEnabled) {
+            if (!adapter.isEnabled) {
                 _connectionStatus.value = ConnectionStatus.Error("Bluetooth выключен")
-                emitLog("Ошибка: Bluetooth выключен на устройстве")
+                emitLog("Ошибка: Bluetooth выключен")
                 return@launch
             }
 
             _connectionStatus.value = ConnectionStatus.Connecting
             emitLog("Подключение к Bluetooth: $address...")
-
             disconnectInternal()
 
             try {
-                try {
-                    bluetoothAdapter.cancelDiscovery()
-                } catch (e: SecurityException) {
-                    // Ignore
-                }
+                try { adapter.cancelDiscovery() } catch (_: SecurityException) { }
 
-                val device = bluetoothAdapter.getRemoteDevice(address)
-                val devName = try { device.name ?: address } catch (e: Exception) { address }
+                val device = adapter.getRemoteDevice(address)
+                val devName = try { device.name ?: address } catch (_: Exception) { address }
 
                 val btSocket = try {
                     device.createRfcommSocketToServiceRecord(SPP_UUID)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to create secure socket, trying insecure", e)
+                    Log.w(TAG, "Secure socket failed, trying insecure", e)
                     device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
                 }
 
                 socket = btSocket
                 btSocket.connect()
-
                 inputStream = btSocket.inputStream
                 outputStream = btSocket.outputStream
 
@@ -198,20 +219,19 @@ class BluetoothSerialManager(
                 synchronized(rawByteStream) { rawByteStream.reset() }
                 synchronized(lineBuffer) { lineBuffer.clear() }
 
-                _connectionStatus.value = ConnectionStatus.Connected(deviceName = devName, baudRate = 0)
+                _connectionStatus.value =
+                    ConnectionStatus.Connected(deviceName = devName, baudRate = 0)
                 emitLog("Подключено по Bluetooth: $devName ($address)")
 
-                // Auto request version and antenna
                 delay(150)
                 sendRawBytes(CMD_REQUEST_VERSION, "Запрос версии модуля")
                 delay(100)
                 sendRawBytes(CMD_ENABLE_ANTENNA, "Включение статуса антенны")
 
-                // Start read loop
                 startReadLoop()
             } catch (e: Exception) {
                 Log.e(TAG, "Bluetooth connection failed", e)
-                val msg = e.message ?: "Не удалось подключиться к Bluetooth устройству"
+                val msg = e.message ?: "Не удалось подключиться"
                 _connectionStatus.value = ConnectionStatus.Error(msg)
                 emitLog("Ошибка подключения BT: $msg")
                 disconnectInternal()
@@ -222,21 +242,17 @@ class BluetoothSerialManager(
     private suspend fun startReadLoop() = withContext(Dispatchers.IO) {
         val buffer = ByteArray(2048)
         val inStream = inputStream ?: return@withContext
-
         try {
             while (isActive && socket?.isConnected == true) {
                 val bytesRead = inStream.read(buffer)
-                if (bytesRead <= 0) {
-                    delay(10)
-                    continue
-                }
-                val receivedData = buffer.copyOf(bytesRead)
-                handleIncomingBytes(receivedData)
+                if (bytesRead <= 0) { delay(10); continue }
+                handleIncomingBytes(buffer.copyOf(bytesRead))
             }
         } catch (e: Exception) {
             if (isActive) {
                 Log.e(TAG, "BT Read loop error", e)
-                _connectionStatus.value = ConnectionStatus.Error(e.message ?: "Ошибка чтения данных Bluetooth")
+                _connectionStatus.value =
+                    ConnectionStatus.Error(e.message ?: "Ошибка чтения BT")
                 emitLog("Ошибка чтения BT: ${e.message}")
                 disconnectInternal()
             }
@@ -252,47 +268,24 @@ class BluetoothSerialManager(
     }
 
     private fun disconnectInternal() {
-        try {
-            inputStream?.close()
-        } catch (e: Exception) {
-            // Ignore
-        } finally {
-            inputStream = null
-        }
-
-        try {
-            outputStream?.close()
-        } catch (e: Exception) {
-            // Ignore
-        } finally {
-            outputStream = null
-        }
-
-        try {
-            socket?.close()
-        } catch (e: Exception) {
-            // Ignore
-        } finally {
-            socket = null
-        }
+        val s = socket; val i = inputStream; val o = outputStream
+        socket = null; inputStream = null; outputStream = null
+        try { i?.close() } catch (_: Exception) { }
+        try { o?.close() } catch (_: Exception) { }
+        try { s?.close() } catch (_: Exception) { }
     }
 
     override fun sendCommand(command: String, lineEnding: String): Boolean {
         val out = outputStream ?: return false
         return try {
-            val trimmed = command.trim()
-            val hexBytes = parseHexCommand(trimmed)
-            val payload = if (hexBytes != null) {
-                hexBytes
-            } else {
-                (command + lineEnding).toByteArray(Charsets.US_ASCII)
-            }
+            val hexBytes = parseHexCommand(command.trim())
+            val payload = hexBytes ?: (command + lineEnding).toByteArray(Charsets.US_ASCII)
             out.write(payload)
             out.flush()
             emitLog("TX: $command")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send BT command: $command", e)
+            Log.e(TAG, "Failed to send BT command", e)
             emitLog("TX Error: ${e.message}")
             false
         }
@@ -303,22 +296,18 @@ class BluetoothSerialManager(
         return try {
             out.write(bytes)
             out.flush()
-            val hexString = bytes.joinToString(" ") { "%02X".format(it) }
-            emitLog("TX [$desc]: $hexString")
+            emitLog("TX [$desc]: ${bytes.joinToString(" ") { "%02X".format(it) }}")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send raw bytes over BT: $desc", e)
+            Log.e(TAG, "Failed to send raw bytes over BT", e)
             emitLog("TX Error ($desc): ${e.message}")
             false
         }
     }
 
     override fun release() {
-        try {
-            context.unregisterReceiver(btReceiver)
-        } catch (e: Exception) {
-            // Ignore
-        }
+        try { context.unregisterReceiver(btReceiver) } catch (_: Exception) { }
         disconnectInternal()
+        super.release()
     }
 }

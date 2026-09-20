@@ -1,12 +1,9 @@
 package ru.krasaev.taugpsbridge.ui
 
-import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.provider.Settings
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,17 +23,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.RadioButtonChecked
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -57,20 +48,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import ru.krasaev.taugpsbridge.model.BluetoothDeviceInfo
 import ru.krasaev.taugpsbridge.model.ConnectionStatus
 import ru.krasaev.taugpsbridge.model.ConnectionType
 import ru.krasaev.taugpsbridge.model.ModuleInfo
 import ru.krasaev.taugpsbridge.model.UsbDeviceInfo
+import ru.krasaev.taugpsbridge.ui.components.DeviceRow
+import ru.krasaev.taugpsbridge.ui.components.StatusGray
+import ru.krasaev.taugpsbridge.ui.components.StatusGreen
 import ru.krasaev.taugpsbridge.ui.theme.TAUGPSBridgeTheme
 import ru.krasaev.taugpsbridge.viewmodel.GpsUiState
 import ru.krasaev.taugpsbridge.viewmodel.GpsViewModel
+
+// ═══════════════════════════════════════════════════════════════
+//  Константы
+// ═══════════════════════════════════════════════════════════════
 
 private val BAUD_RATES = listOf(4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
 private val COMMAND_ENDINGS = listOf(
@@ -80,14 +78,10 @@ private val COMMAND_ENDINGS = listOf(
     "" to "Без окончания"
 )
 
-private val StatusGreen = Color(0xFF4CAF50)
-private val StatusYellow = Color(0xFFFFB300)
-private val StatusRed = Color(0xFFF44336)
-private val StatusGray = Color(0xFF9E9E9E)
+// ═══════════════════════════════════════════════════════════════
+//  Stateful wrapper
+// ═══════════════════════════════════════════════════════════════
 
-/**
- * Stateful wrapper connecting ViewModel to the Settings screen.
- */
 @Composable
 fun SettingsScreen(
     viewModel: GpsViewModel,
@@ -110,11 +104,11 @@ fun SettingsScreen(
         onOpenDevSettings = {
             try {
                 context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 try {
                     context.startActivity(Intent(Settings.ACTION_SETTINGS))
-                } catch (e2: Exception) {
-                    // Ignore
+                } catch (_: Exception) {
+                    // ignore
                 }
             }
         },
@@ -122,9 +116,10 @@ fun SettingsScreen(
     )
 }
 
-/**
- * Stateless UI composable for Settings screen.
- */
+// ═══════════════════════════════════════════════════════════════
+//  Stateless content
+// ═══════════════════════════════════════════════════════════════
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreenContent(
@@ -149,13 +144,11 @@ fun SettingsScreenContent(
             .padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item {
-            Spacer(modifier = Modifier.height(4.dp))
-        }
+        item { Spacer(modifier = Modifier.height(4.dp)) }
 
-        // =========================================================================
-        // 1. ЕДИНЫЙ БЛОК: ТИП ПОДКЛЮЧЕНИЯ И ВЫБОР УСТРОЙСТВА
-        // =========================================================================
+        // ═══════════════════════════════════════════════════════
+        // 1. ПОДКЛЮЧЕНИЕ И УСТРОЙСТВО
+        // ═══════════════════════════════════════════════════════
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -163,326 +156,61 @@ fun SettingsScreenContent(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    // Title and Connection Status Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "ПОДКЛЮЧЕНИЕ И УСТРОЙСТВО",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-
-                        Surface(
-                            color = if (isConnected) StatusGreen.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface,
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isConnected) StatusGreen else StatusGray)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (isConnected) "Подключено" else "Отключено",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isConnected) StatusGreen else StatusGray,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
+                    ConnectionHeader(isConnected = isConnected)
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Connection Type Switcher
-                    TabRow(
-                        selectedTabIndex = if (uiState.connectionType == ConnectionType.USB) 0 else 1,
-                        modifier = Modifier.clip(RoundedCornerShape(12.dp)),
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ) {
-                        Tab(
-                            selected = uiState.connectionType == ConnectionType.USB,
-                            onClick = { onSelectConnectionType(ConnectionType.USB) },
-                            text = { Text("USB OTG", fontWeight = FontWeight.Bold) },
-                            icon = { Icon(Icons.Default.Usb, contentDescription = "USB") }
-                        )
-                        Tab(
-                            selected = uiState.connectionType == ConnectionType.BLUETOOTH,
-                            onClick = { onSelectConnectionType(ConnectionType.BLUETOOTH) },
-                            text = { Text("Bluetooth SPP", fontWeight = FontWeight.Bold) },
-                            icon = { Icon(Icons.Default.Bluetooth, contentDescription = "Bluetooth") }
-                        )
-                    }
+                    ConnectionTypeTabs(
+                        selectedType = uiState.connectionType,
+                        onSelect = onSelectConnectionType
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Devices Header & Scan Button
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (uiState.connectionType == ConnectionType.USB) "Список USB-устройств:" else "Список Bluetooth-устройств:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        IconButton(
-                            onClick = if (uiState.connectionType == ConnectionType.USB) onScanUsbDevices else onScanBluetoothDevices,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Scan", modifier = Modifier.size(20.dp))
-                        }
-                    }
+                    DevicesHeader(
+                        connectionType = uiState.connectionType,
+                        onScan = if (uiState.connectionType == ConnectionType.USB)
+                            onScanUsbDevices
+                        else
+                            onScanBluetoothDevices
+                    )
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Device List Content based on Connection Type
-                    if (uiState.connectionType == ConnectionType.USB) {
-                        if (uiState.availableDevices.isEmpty()) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Usb,
-                                        contentDescription = "No USB",
-                                        tint = Color.Gray,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = "USB-устройства не обнаружены",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "Подключите приёмник через USB OTG и нажмите кнопку обновления",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                uiState.availableDevices.forEach { device ->
-                                    val isSelected = uiState.selectedDeviceName == device.deviceName
-                                    val isDeviceConnected = isConnected && isSelected
-
-                                    Surface(
-                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surface,
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { onSelectUsbDevice(device) }
-                                    ) {
-                                        Column(modifier = Modifier.padding(12.dp)) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (isSelected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
-                                                    contentDescription = "Select",
-                                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                    modifier = Modifier.size(22.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(10.dp))
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        text = device.displayName,
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                    Text(
-                                                        text = "Порт: ${device.deviceName} • VID:${device.vendorId.toString(16).padStart(4, '0')} PID:${device.productId.toString(16).padStart(4, '0')}",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-
-                                                if (isDeviceConnected) {
-                                                    Surface(
-                                                        color = StatusGreen.copy(alpha = 0.2f),
-                                                        shape = RoundedCornerShape(8.dp)
-                                                    ) {
-                                                        Row(
-                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(8.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(StatusGreen)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Text(
-                                                                text = "Активно",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = StatusGreen,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // INLINE MODULE INFO (For selected/connected USB device)
-                                            if (isSelected) {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                InlineModuleInfoBanner(
-                                                    moduleInfo = uiState.gpsData.moduleInfo,
-                                                    isConnected = isConnected
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Bluetooth device list
-                        if (uiState.availableBluetoothDevices.isEmpty()) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Bluetooth,
-                                        contentDescription = "No BT",
-                                        tint = Color.Gray,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = "Bluetooth-устройства не найдены",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "Убедитесь, что Bluetooth включён, а приёмник сопряжён с телефоном",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
-                            }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                uiState.availableBluetoothDevices.forEach { device ->
-                                    val isSelected = uiState.selectedBluetoothAddress == device.address
-                                    val isDeviceConnected = isConnected && isSelected
-
-                                    Surface(
-                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else MaterialTheme.colorScheme.surface,
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { onSelectBluetoothDevice(device) }
-                                    ) {
-                                        Column(modifier = Modifier.padding(12.dp)) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (isSelected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
-                                                    contentDescription = "Select",
-                                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
-                                                    modifier = Modifier.size(22.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(10.dp))
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        text = if (device.name.isNotBlank()) device.name else "Неизвестное устройство",
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                    Text(
-                                                        text = "${device.address} • ${if (device.isBonded) "Сопряжено" else "Найдено"}",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-
-                                                if (isDeviceConnected) {
-                                                    Surface(
-                                                        color = StatusGreen.copy(alpha = 0.2f),
-                                                        shape = RoundedCornerShape(8.dp)
-                                                    ) {
-                                                        Row(
-                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(8.dp)
-                                                                    .clip(CircleShape)
-                                                                    .background(StatusGreen)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(6.dp))
-                                                            Text(
-                                                                text = "Активно",
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = StatusGreen,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // INLINE MODULE INFO (For selected/connected Bluetooth device)
-                                            if (isSelected) {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                InlineModuleInfoBanner(
-                                                    moduleInfo = uiState.gpsData.moduleInfo,
-                                                    isConnected = isConnected
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    when (uiState.connectionType) {
+                        ConnectionType.USB -> UsbDevicesList(
+                            devices = uiState.availableDevices,
+                            selectedName = uiState.selectedDeviceName,
+                            isConnected = isConnected,
+                            moduleInfo = uiState.gpsData.moduleInfo,
+                            onSelect = onSelectUsbDevice
+                        )
+                        ConnectionType.BLUETOOTH -> BluetoothDevicesList(
+                            devices = uiState.availableBluetoothDevices,
+                            selectedAddress = uiState.selectedBluetoothAddress,
+                            isConnected = isConnected,
+                            moduleInfo = uiState.gpsData.moduleInfo,
+                            onSelect = onSelectBluetoothDevice
+                        )
                     }
 
-                    // Disconnect button
                     if (isConnected) {
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedButton(
                             onClick = onDisconnect,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.PowerSettingsNew, contentDescription = "Disconnect", modifier = Modifier.size(18.dp))
+                            Icon(
+                                Icons.Default.PowerSettingsNew,
+                                contentDescription = "Disconnect",
+                                modifier = Modifier.size(18.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Отключить соединение")
                         }
@@ -491,9 +219,9 @@ fun SettingsScreenContent(
             }
         }
 
-        // =========================================================================
-        // 2. ПАРАМЕТРЫ СЕРИЙНОГО ПОРТА И КОМАНД
-        // =========================================================================
+        // ═══════════════════════════════════════════════════════
+        // 2. ПАРАМЕТРЫ ПОРТА И КОМАНД
+        // ═══════════════════════════════════════════════════════
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -501,24 +229,17 @@ fun SettingsScreenContent(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Speed,
-                            contentDescription = "BaudRate",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "ПАРАМЕТРЫ ПОРТА И КОМАНД",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    SectionHeader(
+                        icon = Icons.Default.Speed,
+                        title = "ПАРАМЕТРЫ ПОРТА И КОМАНД"
+                    )
 
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text("Скорость порта (Baud Rate):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Скорость порта (Baud Rate):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Spacer(modifier = Modifier.height(6.dp))
 
                     FlowRow(
@@ -533,7 +254,10 @@ fun SettingsScreenContent(
                                     Text(
                                         text = "$rate",
                                         style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = if (uiState.selectedBaudRate == rate) FontWeight.Bold else FontWeight.Normal
+                                        fontWeight = if (uiState.selectedBaudRate == rate)
+                                            FontWeight.Bold
+                                        else
+                                            FontWeight.Normal
                                     )
                                 }
                             )
@@ -544,7 +268,11 @@ fun SettingsScreenContent(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Text("Окончание строки команд:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Окончание строки команд:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Spacer(modifier = Modifier.height(6.dp))
 
                     FlowRow(
@@ -559,7 +287,10 @@ fun SettingsScreenContent(
                                     Text(
                                         text = label,
                                         style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = if (uiState.selectedCommandEnding == ending) FontWeight.Bold else FontWeight.Normal
+                                        fontWeight = if (uiState.selectedCommandEnding == ending)
+                                            FontWeight.Bold
+                                        else
+                                            FontWeight.Normal
                                     )
                                 }
                             )
@@ -569,9 +300,9 @@ fun SettingsScreenContent(
             }
         }
 
-        // =========================================================================
-        // 3. ФИКТИВНОЕ МЕСТОПОЛОЖЕНИЕ (MOCK LOCATION)
-        // =========================================================================
+        // ═══════════════════════════════════════════════════════
+        // 3. MOCK LOCATION
+        // ═══════════════════════════════════════════════════════
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -605,7 +336,8 @@ fun SettingsScreenContent(
                     }
 
                     Text(
-                        text = "Трансляция координат с GPS-приёмника в систему Android для работы Яндекс.Навигатора, 2ГИС и других приложений.",
+                        text = "Трансляция координат с GPS-приёмника в систему Android " +
+                                "для работы Яндекс.Навигатора, 2ГИС и других приложений.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -617,7 +349,11 @@ fun SettingsScreenContent(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Dev Settings", modifier = Modifier.size(18.dp))
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = "Dev Settings",
+                            modifier = Modifier.size(18.dp)
+                        )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Открыть «Параметры разработчика»")
                     }
@@ -625,105 +361,254 @@ fun SettingsScreenContent(
             }
         }
 
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
-        }
+        item { Spacer(modifier = Modifier.height(16.dp)) }
     }
 }
 
-/**
- * Inline banner displaying Module Info inside the selected device card.
- */
+// ═══════════════════════════════════════════════════════════════
+//  Sub-composables
+// ═══════════════════════════════════════════════════════════════
+
 @Composable
-private fun InlineModuleInfoBanner(
-    moduleInfo: ModuleInfo,
-    isConnected: Boolean
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth()
+private fun ConnectionHeader(isConnected: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Memory,
-                    contentDescription = "Module",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
+        Text(
+            text = "ПОДКЛЮЧЕНИЕ И УСТРОЙСТВО",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        Surface(
+            color = if (isConnected) StatusGreen.copy(alpha = 0.15f)
+            else MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (isConnected) StatusGreen else StatusGray)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "ИНФОРМАЦИЯ О МОДУЛЕ TAU",
+                    text = if (isConnected) "Подключено" else "Отключено",
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            if (!isConnected) {
-                Text(
-                    text = "Подключитесь к устройству для автоматического опроса версии модуля.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else if (!moduleInfo.isDetected) {
-                Text(
-                    text = "Опрос версии модуля TAU (F1 D9)...",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            } else {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
-                        Text("Модель (HW):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            text = moduleInfo.displayModel,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("Прошивка (SW):", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            text = moduleInfo.displayFirmware,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = "Тип: ${moduleInfo.typeDescription}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (moduleInfo.isDualFrequency == true) StatusGreen else MaterialTheme.colorScheme.onSurface
+                    color = if (isConnected) StatusGreen else StatusGray,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
     }
 }
 
-// =========================================================================
-// PREVIEWS
-// =========================================================================
-@Preview(name = "Settings Screen - Connected USB", showBackground = true)
-@Preview(name = "Settings Screen - Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun ConnectionTypeTabs(
+    selectedType: ConnectionType,
+    onSelect: (ConnectionType) -> Unit
+) {
+    TabRow(
+        selectedTabIndex = if (selectedType == ConnectionType.USB) 0 else 1,
+        modifier = Modifier.clip(RoundedCornerShape(12.dp)),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Tab(
+            selected = selectedType == ConnectionType.USB,
+            onClick = { onSelect(ConnectionType.USB) },
+            text = { Text("USB OTG", fontWeight = FontWeight.Bold) },
+            icon = { Icon(Icons.Default.Usb, contentDescription = "USB") }
+        )
+        Tab(
+            selected = selectedType == ConnectionType.BLUETOOTH,
+            onClick = { onSelect(ConnectionType.BLUETOOTH) },
+            text = { Text("Bluetooth SPP", fontWeight = FontWeight.Bold) },
+            icon = { Icon(Icons.Default.Bluetooth, contentDescription = "Bluetooth") }
+        )
+    }
+}
+
+@Composable
+private fun DevicesHeader(
+    connectionType: ConnectionType,
+    onScan: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (connectionType == ConnectionType.USB)
+                "Список USB-устройств:"
+            else
+                "Список Bluetooth-устройств:",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold
+        )
+        IconButton(onClick = onScan, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = "Scan",
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun UsbDevicesList(
+    devices: List<UsbDeviceInfo>,
+    selectedName: String?,
+    isConnected: Boolean,
+    moduleInfo: ModuleInfo,
+    onSelect: (UsbDeviceInfo) -> Unit
+) {
+    if (devices.isEmpty()) {
+        EmptyDevicesState(
+            icon = Icons.Default.Usb,
+            title = "USB-устройства не обнаружены",
+            hint = "Подключите приёмник через USB OTG и нажмите кнопку обновления"
+        )
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        devices.forEach { device ->
+            val isSelected = selectedName == device.deviceName
+            val isDeviceConnected = isConnected && isSelected
+
+            DeviceRow(
+                isSelected = isSelected,
+                isConnected = isDeviceConnected,
+                onClick = { onSelect(device) },
+                title = device.displayName.ifBlank { "USB-устройство" },
+                subtitle = "Порт: ${device.deviceName} • " +
+                        "VID:${device.vendorId.toString(16).padStart(4, '0')} " +
+                        "PID:${device.productId.toString(16).padStart(4, '0')}",
+                moduleInfo = moduleInfo
+            )
+        }
+    }
+}
+
+@Composable
+private fun BluetoothDevicesList(
+    devices: List<BluetoothDeviceInfo>,
+    selectedAddress: String?,
+    isConnected: Boolean,
+    moduleInfo: ModuleInfo,
+    onSelect: (BluetoothDeviceInfo) -> Unit
+) {
+    if (devices.isEmpty()) {
+        EmptyDevicesState(
+            icon = Icons.Default.Bluetooth,
+            title = "Bluetooth-устройства не найдены",
+            hint = "Убедитесь, что Bluetooth включён, а приёмник сопряжён с телефоном"
+        )
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        devices.forEach { device ->
+            val isSelected = selectedAddress == device.address
+            val isDeviceConnected = isConnected && isSelected
+
+            DeviceRow(
+                isSelected = isSelected,
+                isConnected = isDeviceConnected,
+                onClick = { onSelect(device) },
+                title = device.name.ifBlank { "Неизвестное устройство" },
+                subtitle = "${device.address} • " +
+                        if (device.isBonded) "Сопряжено" else "Найдено",
+                moduleInfo = moduleInfo
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyDevicesState(
+    icon: ImageVector,
+    title: String,
+    hint: String
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.Gray,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    icon: ImageVector,
+    title: String
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PREVIEWS
+// ═══════════════════════════════════════════════════════════════
+
+@Preview(name = "Settings - Connected USB", showBackground = true)
+@Preview(name = "Settings - Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun SettingsScreenPreview() {
     TAUGPSBridgeTheme {
         SettingsScreenContent(
             uiState = GpsUiState(
                 connectionType = ConnectionType.USB,
-                connectionStatus = ConnectionStatus.Connected("ttyUSB0", 115200),
+                connectionStatus = ConnectionStatus.Connected(
+                    deviceName = "ttyUSB0",
+                    baudRate = 115200
+                ),
                 selectedDeviceName = "ttyUSB0",
                 selectedBaudRate = 115200,
                 selectedCommandEnding = "\r\n",
@@ -733,9 +618,9 @@ fun SettingsScreenPreview() {
                         deviceName = "ttyUSB0",
                         vendorId = 0x10c4,
                         productId = 0xea60,
-                        manufacturerName = "TAU",
-                        productName = "TAU1201-DR Module",
-                        serialNumber = "123456",
+                        manufacturerName = "Silicon Labs",
+                        productName = "CP2102 USB-UART",
+                        serialNumber = "0001",
                         portCount = 1,
                         hasPermission = true
                     ),
@@ -745,7 +630,7 @@ fun SettingsScreenPreview() {
                         productId = 0x6001,
                         manufacturerName = "FTDI",
                         productName = "FT232R USB UART",
-                        serialNumber = "654321",
+                        serialNumber = "A50285BI",
                         portCount = 1,
                         hasPermission = true
                     )
@@ -759,8 +644,8 @@ fun SettingsScreenPreview() {
                 ),
                 gpsData = ru.krasaev.taugpsbridge.model.GpsData(
                     moduleInfo = ModuleInfo(
-                        swVersion = "V2.3.1",
-                        hwVersion = "TAU1201-DR",
+                        swVersion = "3.M8C.4e08c7",
+                        hwVersion = "HD8040DF.017747a",
                         isDualFrequency = true,
                         isDetected = true
                     )
@@ -780,7 +665,7 @@ fun SettingsScreenPreview() {
     }
 }
 
-@Preview(name = "Settings Screen - Empty State", showBackground = true)
+@Preview(name = "Settings - Empty", showBackground = true)
 @Composable
 fun SettingsScreenEmptyPreview() {
     TAUGPSBridgeTheme {

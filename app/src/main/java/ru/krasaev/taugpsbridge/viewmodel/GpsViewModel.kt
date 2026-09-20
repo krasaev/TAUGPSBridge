@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.krasaev.taugpsbridge.model.BluetoothDeviceInfo
@@ -31,9 +30,11 @@ data class GpsUiState(
     val selectedCommandEnding: String = "\r\n",
     val commandInput: String = "",
     val isLoggingEnabled: Boolean = false,
-    val logs: List<String> = emptyList(),
-    val isServiceRunning: Boolean = false
-)
+    val logs: List<String> = emptyList()
+) {
+    /** Сервис считается запущенным только когда mock location активен. */
+    val isServiceRunning: Boolean get() = isMockLocationActive
+}
 
 class GpsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -43,96 +44,121 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<GpsUiState> = _uiState.asStateFlow()
 
     init {
-        // Collect Connection Type
+        observeConnectionType()
+        observeGpsData()
+        observeConnectionStatus()
+        observeMockLocation()
+        observeErrors()
+        observeDevices()
+        observeSettings()
+        observeLogs()
+
+        // Первоначальное сканирование (в фоне, не блокирует UI)
         viewModelScope.launch {
-            repository.selectedConnectionType.collectLatest { type ->
+            scanDevices()
+            scanBluetoothDevices()
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Наблюдение за репозиторием
+    // ═══════════════════════════════════════════════════════════
+
+    private fun observeConnectionType() {
+        viewModelScope.launch {
+            repository.selectedConnectionType.collect { type ->
                 _uiState.update { it.copy(connectionType = type) }
             }
         }
+    }
 
-        // Collect GPS Data
+    private fun observeGpsData() {
         viewModelScope.launch {
-            repository.gpsData.collectLatest { data ->
+            repository.gpsData.collect { data ->
                 _uiState.update { it.copy(gpsData = data) }
             }
         }
+    }
 
-        // Collect Connection Status
+    private fun observeConnectionStatus() {
         viewModelScope.launch {
-            repository.connectionStatus.collectLatest { status ->
+            repository.connectionStatus.collect { status ->
                 _uiState.update { it.copy(connectionStatus = status) }
             }
         }
+    }
 
-        // Collect Mock Location Active state
+    private fun observeMockLocation() {
         viewModelScope.launch {
-            repository.isMockLocationActive.collectLatest { active ->
+            repository.isMockLocationActive.collect { active ->
                 _uiState.update { it.copy(isMockLocationActive = active) }
             }
         }
+    }
 
-        // Collect Mock Location Error
+    private fun observeErrors() {
         viewModelScope.launch {
-            repository.mockLocationError.collectLatest { error ->
+            repository.mockLocationError.collect { error ->
                 _uiState.update { it.copy(mockLocationError = error) }
             }
         }
-
-        // Collect General Error
         viewModelScope.launch {
-            repository.generalError.collectLatest { error ->
+            repository.generalError.collect { error ->
                 _uiState.update { it.copy(generalError = error) }
             }
         }
+    }
 
-        // Collect Available USB Devices
+    private fun observeDevices() {
         viewModelScope.launch {
-            repository.availableDevices.collectLatest { devices ->
+            repository.availableDevices.collect { devices ->
                 _uiState.update { it.copy(availableDevices = devices) }
             }
         }
-
-        // Collect Available Bluetooth Devices
         viewModelScope.launch {
-            repository.availableBluetoothDevices.collectLatest { btDevices ->
+            repository.availableBluetoothDevices.collect { btDevices ->
                 _uiState.update { it.copy(availableBluetoothDevices = btDevices) }
             }
         }
+    }
 
-        // Collect Logging Enabled state
+    private fun observeSettings() {
         viewModelScope.launch {
-            repository.isLoggingEnabled.collectLatest { enabled ->
-                _uiState.update { it.copy(isLoggingEnabled = enabled) }
-            }
-        }
-
-        // Collect Selected Baud Rate
-        viewModelScope.launch {
-            repository.selectedBaudRate.collectLatest { baud ->
+            repository.selectedBaudRate.collect { baud ->
                 _uiState.update { it.copy(selectedBaudRate = baud) }
             }
         }
-
-        // Collect Selected Command Ending
         viewModelScope.launch {
-            repository.selectedCommandEnding.collectLatest { ending ->
+            repository.selectedCommandEnding.collect { ending ->
                 _uiState.update { it.copy(selectedCommandEnding = ending) }
             }
         }
+        viewModelScope.launch {
+            repository.isLoggingEnabled.collect { enabled ->
+                _uiState.update { it.copy(isLoggingEnabled = enabled) }
+            }
+        }
+    }
 
-        // Collect Logs
+    private fun observeLogs() {
         viewModelScope.launch {
             repository.logHistory.collect { log ->
                 _uiState.update { state ->
-                    val updatedLogs = (state.logs + log).takeLast(300)
-                    state.copy(logs = updatedLogs)
+                    // Держим не больше 300 строк
+                    val newLogs = if (state.logs.size >= MAX_LOGS) {
+                        state.logs.drop(state.logs.size - MAX_LOGS + 1) + log
+                    } else {
+                        state.logs + log
+                    }
+                    state.copy(logs = newLogs)
                 }
             }
         }
-
-        scanDevices()
-        scanBluetoothDevices()
     }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Действия пользователя
+    // ═══════════════════════════════════════════════════════════
 
     fun selectConnectionType(type: ConnectionType) {
         repository.selectConnectionType(type)
@@ -161,22 +187,12 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectAndConnectDevice(device: UsbDeviceInfo) {
         repository.selectAndConnectDevice(device)
-        _uiState.update {
-            it.copy(
-                selectedDeviceName = device.deviceName,
-                isServiceRunning = true
-            )
-        }
+        _uiState.update { it.copy(selectedDeviceName = device.deviceName) }
     }
 
     fun selectAndConnectBluetoothDevice(device: BluetoothDeviceInfo) {
         repository.selectAndConnectBluetoothDevice(device)
-        _uiState.update {
-            it.copy(
-                selectedBluetoothAddress = device.address,
-                isServiceRunning = true
-            )
-        }
+        _uiState.update { it.copy(selectedBluetoothAddress = device.address) }
     }
 
     fun selectBaudRate(baudRate: Int) {
@@ -193,44 +209,55 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(commandInput = input) }
     }
 
-    fun setLoggingEnabled(enabled: Boolean) {
-        repository.setLoggingEnabled(enabled)
-    }
+    /**
+     * Отправка команды. Если [customCommand] = null — берётся ввод из UI,
+     * и поле очищается только при успешной отправке.
+     */
+    fun sendCommand(customCommand: String? = null) {
+        val cmd = customCommand ?: _uiState.value.commandInput
+        if (cmd.isBlank()) return
 
-    fun toggleLogging() {
-        val current = _uiState.value.isLoggingEnabled
-        repository.setLoggingEnabled(!current)
-    }
+        val success = repository.sendCommand(cmd)
 
-    fun clearGeneralError() {
-        repository.clearGeneralError()
+        // Очищаем поле только если пользователь отправлял из UI и всё прошло успешно
+        if (customCommand == null && success) {
+            _uiState.update { it.copy(commandInput = "") }
+        }
     }
 
     fun connect() {
         repository.connect()
-        _uiState.update { it.copy(isServiceRunning = true) }
     }
 
     fun disconnect() {
         repository.disconnect()
-        _uiState.update { it.copy(isServiceRunning = false) }
     }
 
     fun toggleMockLocation(enable: Boolean) {
         repository.setMockLocationActive(enable)
     }
 
-    fun sendCommand(customCommand: String? = null) {
-        val cmd = customCommand ?: _uiState.value.commandInput
-        if (cmd.isNotBlank()) {
-            repository.sendCommand(cmd)
-            if (customCommand == null) {
-                _uiState.update { it.copy(commandInput = "") }
-            }
-        }
+    fun setLoggingEnabled(enabled: Boolean) {
+        repository.setLoggingEnabled(enabled)
+    }
+
+    fun toggleLogging() {
+        repository.setLoggingEnabled(!_uiState.value.isLoggingEnabled)
     }
 
     fun clearLogs() {
         _uiState.update { it.copy(logs = emptyList()) }
+    }
+
+    fun clearGeneralError() {
+        repository.clearGeneralError()
+    }
+
+    fun clearMockLocationError() {
+        repository.clearMockLocationError()
+    }
+
+    private companion object {
+        const val MAX_LOGS = 300
     }
 }

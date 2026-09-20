@@ -1,6 +1,7 @@
 package ru.krasaev.taugpsbridge.ui
 
 import android.content.res.Configuration
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ru.krasaev.taugpsbridge.model.AntennaState
 import ru.krasaev.taugpsbridge.model.AntennaStatus
@@ -50,42 +52,36 @@ import ru.krasaev.taugpsbridge.model.InsInstallState
 import ru.krasaev.taugpsbridge.model.InsStatus
 import ru.krasaev.taugpsbridge.model.ModuleInfo
 import ru.krasaev.taugpsbridge.model.SatelliteSystemInfo
+import ru.krasaev.taugpsbridge.ui.components.StatusGray
+import ru.krasaev.taugpsbridge.ui.components.StatusGreen
+import ru.krasaev.taugpsbridge.ui.components.StatusRed
+import ru.krasaev.taugpsbridge.ui.components.StatusYellow
 import ru.krasaev.taugpsbridge.ui.theme.TAUGPSBridgeTheme
 import ru.krasaev.taugpsbridge.viewmodel.GpsUiState
 import java.util.Locale
 
-private val StatusGreen = Color(0xFF4CAF50)
-private val StatusYellow = Color(0xFFFFB300)
-private val StatusRed = Color(0xFFF44336)
-private val StatusGray = Color(0xFF9E9E9E)
-
 // ═══════════════════════════════════════════════════════════════
-//  Локально-независимые форматтеры (не зависят от Locale телефона)
+//  Локально-независимые форматтеры
 // ═══════════════════════════════════════════════════════════════
 
 private fun f1(v: Double?): String =
     v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
 
-// ↓↓↓ ДОБАВИТЬ ЭТУ ПЕРЕГРУЗКУ ↓↓↓
 private fun f1(v: Float?): String =
     v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
-// ↑↑↑
-
-private fun f2(v: Double?): String =
-    v?.let { String.format(Locale.US, "%.2f", it) } ?: "—"
 
 private fun f6(v: Double?): String =
     v?.let { String.format(Locale.US, "%.6f", it) } ?: "—"
 
 // ═══════════════════════════════════════════════════════════════
 //  Агрегация спутников по системе
-//  (парсер хранит ключи "GPS_L1", "GPS_L5", "BDS_B1", ...)
+//  Парсер хранит ключи "GPS_L1", "GPS_L5", "BDS_B1", "BDS_B2a", ...
 // ═══════════════════════════════════════════════════════════════
 
 private data class SystemAggregate(val count: Int, val cno: Double?)
 
 /**
- * Возвращает агрегат по системе только из PRIMARY band,
+ * Агрегат по системе только из PRIMARY band,
  * чтобы не задваивать L1 и L5 (это одни и те же физические спутники).
  */
 private fun GpsData.systemAggregate(system: String): SystemAggregate {
@@ -196,7 +192,7 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // GNSS Fix Status Badge & Satellite Counts directly below header
+            // GNSS Fix Badge + satellite counts
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -205,7 +201,7 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
                 Surface(
                     color = fixColor.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, fixColor)
+                    border = BorderStroke(1.dp, fixColor)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -242,7 +238,7 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(10.dp))
 
-            // ─── АГРЕГ��ЦИЯ ПО СИСТЕМАМ ───
+            // ─── АГРЕГАЦИЯ ПО СИСТЕМАМ ───
             val gps = gpsData.systemAggregate("GPS")
             val bds = gpsData.systemAggregate("BDS")
             val glo = gpsData.systemAggregate("GLO")
@@ -262,7 +258,7 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(10.dp))
 
-            // ─── СРЕДНИЙ C/N0 СИГНАЛ ───
+            // ─── СРЕДНИЙ C/N0 ───
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -291,7 +287,7 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // ─── DOP ТОЧНОСТЬ (НА ОТДЕЛЬНОЙ СТРОКЕ) ───
+            // ─── DOP ───
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "Точность (DOP):",
@@ -331,7 +327,11 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
             // ─── АНТЕННА И ВРЕМЯ ФИКСА ───
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text("Состояние антенны", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Состояние антенны",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusLed(color = antColor, size = 10.dp)
                         Spacer(modifier = Modifier.width(6.dp))
@@ -345,7 +345,11 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
                 }
 
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("Диапазон", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Диапазон",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = if (ant.isDualBand) "L1 + L5 ✅" else "Только L1 ⚠️",
                         style = MaterialTheme.typography.bodyMedium,
@@ -359,7 +363,11 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text("L1 / L5 C/N0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "L1 / L5 C/N0",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = "L1: ${f1(ant.l1AvgCno)} дБГц  •  L5: ${f1(ant.l5AvgCno)} дБГц",
                         style = MaterialTheme.typography.bodyMedium,
@@ -368,7 +376,11 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
                 }
 
                 Column(horizontalAlignment = Alignment.End) {
-                    Text("Время 1-го фикса", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Время 1-го фикса",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = backup.timeToFirstFixSeconds?.let { "$it с" } ?: "—",
                         style = MaterialTheme.typography.bodyMedium,
@@ -414,7 +426,11 @@ private fun CoordinatesAndMotionBlock(gpsData: GpsData) {
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text("Широта (Latitude)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Широта (Latitude)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = gpsData.latitude?.let { "${f6(it)}°" } ?: "—",
                         style = MaterialTheme.typography.titleMedium,
@@ -423,7 +439,11 @@ private fun CoordinatesAndMotionBlock(gpsData: GpsData) {
                     )
                 }
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text("Долгота (Longitude)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Долгота (Longitude)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = gpsData.longitude?.let { "${f6(it)}°" } ?: "—",
                         style = MaterialTheme.typography.titleMedium,
@@ -442,7 +462,7 @@ private fun CoordinatesAndMotionBlock(gpsData: GpsData) {
                 )
                 TelemetryParam(
                     title = "Скорость",
-                    value = gpsData.speedKmh?.let { "${f1(it)} км/ч" } ?: "0.0 км/ч"
+                    value = gpsData.speedKmh?.let { "${f1(it)} км/ч" } ?: "—"
                 )
                 TelemetryParam(
                     title = "Курс",
@@ -489,7 +509,7 @@ private fun InsStatusBlock(gpsData: GpsData) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(18.dp),
-        border = androidx.compose.foundation.BorderStroke(2.dp, drColor),
+        border = BorderStroke(2.dp, drColor),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -535,12 +555,19 @@ private fun InsStatusBlock(gpsData: GpsData) {
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Режим DR (dr):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Режим DR (dr):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusLed(color = drColor, size = 12.dp)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (ins.rawDr.isNotEmpty()) "${ins.drState.title} [${ins.rawDr}]" else ins.drState.title,
+                            text = if (ins.rawDr.isNotEmpty())
+                                "${ins.drState.title} [${ins.rawDr}]"
+                            else
+                                ins.drState.title,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
                             color = drColor
@@ -549,12 +576,19 @@ private fun InsStatusBlock(gpsData: GpsData) {
                 }
 
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text("Калибровка (install):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Калибровка (install):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusLed(color = installColor, size = 12.dp)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (ins.rawInstall.isNotEmpty()) "${ins.installState.title} [${ins.rawInstall}]" else ins.installState.title,
+                            text = if (ins.rawInstall.isNotEmpty())
+                                "${ins.installState.title} [${ins.rawInstall}]"
+                            else
+                                ins.installState.title,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
                             color = installColor
@@ -568,7 +602,7 @@ private fun InsStatusBlock(gpsData: GpsData) {
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -591,7 +625,7 @@ private fun InsStatusBlock(gpsData: GpsData) {
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = ins.recommendation,
+                            text = ins.recommendation.ifBlank { "Ожидание данных..." },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -607,7 +641,7 @@ private fun InsStatusBlock(gpsData: GpsData) {
 // HELPER UI COMPONENTS
 // =========================================================================
 @Composable
-private fun StatusLed(color: Color, size: androidx.compose.ui.unit.Dp = 10.dp) {
+private fun StatusLed(color: Color, size: Dp = 10.dp) {
     Box(
         modifier = Modifier
             .size(size)
@@ -620,7 +654,11 @@ private fun StatusLed(color: Color, size: androidx.compose.ui.unit.Dp = 10.dp) {
 @Composable
 private fun TelemetryParam(title: String, value: String, alignEnd: Boolean = false) {
     Column(horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
-        Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            title,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
@@ -633,10 +671,14 @@ private fun TelemetryParam(title: String, value: String, alignEnd: Boolean = fal
 @Composable
 private fun ConstellationStat(name: String, count: Int, avgCno: Double?) {
     Column {
-        Text(name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            name,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Text(
             text = if (count > 0)
-                "$count сп. ${avgCno?.let { "(${f1(it)} dB)" } ?: ""}"
+                "$count сп. ${avgCno?.let { "(${f1(it)} дБГц)" } ?: ""}"
             else
                 "0 сп.",
             style = MaterialTheme.typography.bodyMedium,
@@ -656,7 +698,10 @@ fun MainScreenPreview() {
     TAUGPSBridgeTheme {
         MainScreen(
             uiState = GpsUiState(
-                connectionStatus = ConnectionStatus.Connected(deviceName = "ttyUSB0", baudRate = 115200),
+                connectionStatus = ConnectionStatus.Connected(
+                    deviceName = "ttyUSB0",
+                    baudRate = 115200
+                ),
                 selectedDeviceName = "ttyUSB0",
                 selectedBaudRate = 115200,
                 gpsData = GpsData(

@@ -28,6 +28,10 @@ class NmeaParser {
     private val cnoByBand = mutableMapOf<String, MutableMap<Int, Double>>()
     private val bandAverages = mutableMapOf<String, Double?>()
 
+    // ─── Primary и secondary bands для подсчёта спутников ───
+    private val primaryBands = listOf("L1", "B1", "E1")
+    private val secondaryBands = listOf("L5", "B2a", "E5a")
+
     // ═══════════════════════════════════════════════════════
     //  Lifecycle
     // ═══════════════════════════════════════════════════════
@@ -251,13 +255,15 @@ class NmeaParser {
         rebuildBandAverages()
 
         // ─── L1 и L5 средние по всем системам ───
-        val l1Avg = averageAcrossBands(listOf("L1", "B1", "E1"))
-        val l5Avg = averageAcrossBands(listOf("L5", "B2a", "E5a"))
+        val l1Avg = averageAcrossBands(primaryBands)
+        val l5Avg = averageAcrossBands(secondaryBands)
 
-        // Двухчастотность: наличие любой secondary band
-        val dualDetected = cnoByBand.keys.any { key ->
-            key.endsWith("_L5") || key.endsWith("_B2a") || key.endsWith("_E5a")
-        }
+        // ─── Кол-во спутников по диапазонам (для UI) ───
+        val l1SatCount = countSatsInBands(primaryBands)
+        val l5SatCount = countSatsInBands(secondaryBands)
+
+        // Двухчастотность: наличие любой secondary band с данными
+        val dualDetected = l5SatCount > 0
 
         val newModuleInfo = if (dualDetected && currentData.moduleInfo.isDualFrequency != true) {
             currentData.moduleInfo.copy(isDualFrequency = true)
@@ -273,6 +279,8 @@ class NmeaParser {
                 isDualBand = dualDetected,
                 l1AvgCno = l1Avg,
                 l5AvgCno = l5Avg,
+                rawL1SatCount = l1SatCount,
+                rawL5SatCount = l5SatCount,
                 lastUpdatedMillis = System.currentTimeMillis()
             ),
             moduleInfo = newModuleInfo,
@@ -380,14 +388,14 @@ class NmeaParser {
      */
     private fun resolveBand(system: String, signalId: Int?): String = when (system) {
         "GPS" -> when (signalId) {
-            5, 6 -> "L2C"      // L2C-M, L2C-L
-            7, 8 -> "L5"       // L5-I, L5-Q
-            else -> "L1"       // 1 = L1 C/A
+            5, 6 -> "L2C"
+            7, 8 -> "L5"
+            else -> "L1"
         }
         "BDS" -> when (signalId) {
-            5, 6, 7, 8 -> "B2a"  // B2I/B2Q/B2a/B2b → все secondary
+            5, 6, 7, 8 -> "B2a"
             9 -> "B3I"
-            else -> "B1"         // 1 = B1I
+            else -> "B1"
         }
         "GLO" -> "L1"
         "GAL" -> when (signalId) {
@@ -424,8 +432,18 @@ class NmeaParser {
         return if (cnt > 0) sum / cnt else null
     }
 
+    /** Суммарное число спутников по заданным бэндам (без двойного счёта). */
+    private fun countSatsInBands(bands: List<String>): Int {
+        var total = 0
+        for ((key, map) in cnoByBand) {
+            val band = key.substringAfter("_", "")
+            if (band in bands) total += map.size
+        }
+        return total
+    }
+
     /**
-     * Ключ = "GPS_L1", "BDS_B2a" и т.д. UI может распарсить через substringBefore/After("_").
+     * Ключ = "GPS_L1", "BDS_B2a" и т.д.
      */
     private fun buildSystemsSummary(): Map<String, SatelliteSystemInfo> {
         val result = mutableMapOf<String, SatelliteSystemInfo>()
@@ -449,10 +467,7 @@ class NmeaParser {
     }
 
     /** Только primary bands — без двойного счёта L5/B2a. */
-    private fun computeSatellitesInView(): Int =
-        cnoByBand
-            .filterKeys { it.endsWith("_L1") || it.endsWith("_B1") || it.endsWith("_E1") }
-            .values.sumOf { it.size }
+    private fun computeSatellitesInView(): Int = countSatsInBands(primaryBands)
 
     // ═══════════════════════════════════════════════════════
     //  TXT helpers

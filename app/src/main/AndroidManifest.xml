@@ -2,40 +2,77 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
-    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <!-- USB host, но не обязателен — приложение можно ставить и без него -->
+    <uses-feature
+            android:name="android.hardware.usb.host"
+            android:required="false" />
+    <uses-feature
+            android:name="android.hardware.bluetooth"
+            android:required="false" />
 
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <!-- Bluetooth: разрешения для старых версий -->
+    <uses-permission
+            android:name="android.permission.BLUETOOTH"
+            android:maxSdkVersion="30" />
+    <uses-permission
+            android:name="android.permission.BLUETOOTH_ADMIN"
+            android:maxSdkVersion="30" />
+
+    <!-- Bluetooth: разрешения для Android 12+ -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" tools:targetApi="s" />
+    <uses-permission
+            android:name="android.permission.BLUETOOTH_SCAN"
+            android:usesPermissionFlags="neverForLocation"
+            tools:targetApi="s" />
 
+    <!-- Местоположение -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" tools:ignore="MockLocation" />
+
+    <!-- Mock location: работает только в системных приложениях,
+         но не мешает и не вызывает ошибок. Основной механизм — AppOpsManager -->
+    <uses-permission
+            android:name="android.permission.ACCESS_MOCK_LOCATION"
+            tools:ignore="MockLocation" />
+
+    <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Android 11+: запрос видимости системных экранов настроек -->
+    <queries>
+        <intent>
+            <action android:name="android.settings.APPLICATION_DEVELOPMENT_SETTINGS" />
+        </intent>
+    </queries>
+
     <application
-            android:usesCleartextTraffic="false"
             android:allowBackup="true"
             android:dataExtractionRules="@xml/data_extraction_rules"
             android:fullBackupContent="@xml/backup_rules"
             android:label="@string/app_name"
             android:supportsRtl="true"
-            android:theme="@style/Theme.TAUGPSBridge">
+            android:theme="@style/Theme.TAUGPSBridge"
+            android:usesCleartextTraffic="false"
+            tools:targetApi="31">
+
         <activity
                 android:name=".MainActivity"
-                android:exported="true"
-                android:theme="@style/Theme.TAUGPSBridge">
+                android:exported="true">
+
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Автозапуск при подключении USB-устройства из device_filter.xml -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
+            <meta-data
+                    android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                    android:resource="@xml/device_filter" />
         </activity>
 
         <service
@@ -43,5 +80,4 @@
                 android:exported="false"
                 android:foregroundServiceType="location" />
     </application>
-
 </manifest>

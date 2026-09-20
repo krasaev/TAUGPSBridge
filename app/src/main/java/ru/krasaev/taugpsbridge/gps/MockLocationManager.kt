@@ -14,65 +14,72 @@ class MockLocationManager(private val context: Context) {
     companion object {
         private const val TAG = "MockLocationManager"
         const val PROVIDER_NAME = LocationManager.GPS_PROVIDER
+
+        /** Минимальная скорость (м/с), при которой стоит передавать курс. */
+        private const val MIN_SPEED_FOR_BEARING = 0.5
+
+        /** Базовая точность по умолчанию (метры), если из модуля ничего не пришло. */
+        private const val DEFAULT_ACCURACY = 5.0f
     }
 
     private val locationManager: LocationManager? =
         context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
 
+    @Volatile
     private var isProviderAdded = false
+
+    @Volatile
     var isEnabled: Boolean = false
         private set
 
+    // ═══════════════════════════════════════════════════════════
+    //  Старт / стоп
+    // ═══════════════════════════════════════════════════════════
+
     @Suppress("DEPRECATION", "WrongConstant")
     fun startMock(): Result<Unit> {
-        if (locationManager == null) {
-            return Result.failure(IllegalStateException("LocationManager is null"))
-        }
+        val lm = locationManager
+            ?: return Result.failure(IllegalStateException("LocationManager is null"))
 
         return try {
+            // На случай, если провайдер остался с прошлого запуска
             try {
-                // In case it was previously added and not removed
-                locationManager.removeTestProvider(PROVIDER_NAME)
-            } catch (e: Exception) {
-                // Ignore if it wasn't registered
+                lm.removeTestProvider(PROVIDER_NAME)
+            } catch (_: Exception) {
+                // ok — не был зарегистрирован
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                locationManager.addTestProvider(
+                lm.addTestProvider(
                     PROVIDER_NAME,
-                    false, // requiresNetwork
-                    false, // requiresSatellite
-                    false, // requiresCell
-                    false, // hasMonetaryCost
-                    true,  // supportsAltitude
-                    true,  // supportsSpeed
-                    true,  // supportsBearing
+                    /* requiresNetwork = */ false,
+                    /* requiresSatellite = */ false,
+                    /* requiresCell = */ false,
+                    /* hasMonetaryCost = */ false,
+                    /* supportsAltitude = */ true,
+                    /* supportsSpeed = */ true,
+                    /* supportsBearing = */ true,
                     android.location.provider.ProviderProperties.POWER_USAGE_LOW,
                     android.location.provider.ProviderProperties.ACCURACY_FINE
                 )
             } else {
                 @Suppress("DEPRECATION")
-                locationManager.addTestProvider(
+                lm.addTestProvider(
                     PROVIDER_NAME,
-                    false,
-                    false,
-                    false,
-                    false,
-                    true,
-                    true,
-                    true,
+                    false, false, false, false,
+                    true, true, true,
                     Criteria.POWER_LOW,
                     Criteria.ACCURACY_FINE
                 )
             }
 
-            locationManager.setTestProviderEnabled(PROVIDER_NAME, true)
+            lm.setTestProviderEnabled(PROVIDER_NAME, true)
             isProviderAdded = true
             isEnabled = true
-            Log.i(TAG, "Mock location test provider initialized successfully")
+            Log.i(TAG, "Mock location test provider initialized")
             Result.success(Unit)
         } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException: Mock location permission not enabled in Developer options", e)
+            Log.e(TAG, "Mock location not allowed in Developer options", e)
             isProviderAdded = false
             isEnabled = false
             Result.failure(e)
@@ -84,8 +91,32 @@ class MockLocationManager(private val context: Context) {
         }
     }
 
+    fun stopMock() {
+        val lm = locationManager ?: return
+        synchronized(this) {
+            if (!isProviderAdded) return
+            try {
+                lm.setTestProviderEnabled(PROVIDER_NAME, false)
+                lm.removeTestProvider(PROVIDER_NAME)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error removing test provider", e)
+            } finally {
+                isProviderAdded = false
+                isEnabled = false
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Push
+    // ═══════════════════════════════════════════════════════════
+
+    @Synchronized
     fun pushLocation(gpsData: GpsData): Result<Unit> {
-        if (!isEnabled || !isProviderAdded || locationManager == null) {
+        val lm = locationManager
+            ?: return Result.failure(IllegalStateException("LocationManager is null"))
+
+        if (!isEnabled || !isProviderAdded) {
             return Result.failure(IllegalStateException("Mock provider not started"))
         }
 
@@ -96,24 +127,45 @@ class MockLocationManager(private val context: Context) {
         }
 
         return try {
+            val speedMps = (gpsData.speedMps ?: 0.0)
+            val bearingToPush = if (speedMps > MIN_SPEED_FOR_BEARING) {
+                gpsData.bearingDegrees ?: 0.0f
+            } else {
+                0.0f
+            }
+
+            val accuracy = (gpsData.accuracyMeters ?: DEFAULT_ACCURACY)
+                .coerceAtLeast(3.0f)
+
+            val verticalAccuracy = (gpsData.vdop ?: 1.0f) * 5.0f
+
             val location = Location(PROVIDER_NAME).apply {
                 latitude = lat
                 longitude = lon
                 altitude = gpsData.altitudeMeters ?: 0.0
-                speed = (gpsData.speedMps ?: 0.0).toFloat()
-                bearing = gpsData.bearingDegrees ?: 0.0f
-                accuracy = gpsData.accuracyMeters ?: 3.0f
-                time = if (gpsData.timestampUtcMillis > 0) gpsData.timestampUtcMillis else System.currentTimeMillis()
+                speed = speedMps.toFloat()
+                bearing = bearingToPush
+                this.accuracy = accuracy
+                time = if (gpsData.timestampUtcMillis > 0) {
+                    gpsData.timestampUtcMillis
+                } else {
+                    System.currentTimeMillis()
+                }
                 elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    bearingAccuracyDegrees = 5.0f
+                    bearingAccuracyDegrees = 10.0f
                     speedAccuracyMetersPerSecond = 0.5f
-                    verticalAccuracyMeters = (gpsData.vdop ?: 1.0f) * 3.0f
+                    verticalAccuracyMeters = verticalAccuracy
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // 1 секунда неопределённости по монотонному времени
+                    elapsedRealtimeUncertaintyNanos = 1_000_000_000.0
                 }
             }
 
-            locationManager.setTestProviderLocation(PROVIDER_NAME, location)
+            lm.setTestProviderLocation(PROVIDER_NAME, location)
             Result.success(Unit)
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException while pushing mock location", e)
@@ -121,20 +173,6 @@ class MockLocationManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error pushing mock location", e)
             Result.failure(e)
-        }
-    }
-
-    fun stopMock() {
-        if (isProviderAdded && locationManager != null) {
-            try {
-                locationManager.setTestProviderEnabled(PROVIDER_NAME, false)
-                locationManager.removeTestProvider(PROVIDER_NAME)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error removing test provider", e)
-            } finally {
-                isProviderAdded = false
-                isEnabled = false
-            }
         }
     }
 }
