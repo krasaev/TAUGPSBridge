@@ -153,9 +153,9 @@ private fun SatellitesAndSignalBlock(gpsData: GpsData) {
 
     val cnoQualityText = when {
         overallCno == null -> "—"
-        overallCno > 40.0 -> "🟢 Отлично"
-        overallCno >= 30.0 -> "🟢 Хорошо"
-        overallCno >= 25.0 -> "🟡 Удовлетворительно"
+        overallCno > 40.0 -> "🟢"
+        overallCno >= 30.0 -> "🟢"
+        overallCno >= 25.0 -> "🟡"
         overallCno >= 15.0 -> "🔴 Слабо"
         else -> "🔴 Нет приёма"
     }
