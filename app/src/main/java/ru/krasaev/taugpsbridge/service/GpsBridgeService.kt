@@ -62,20 +62,23 @@ class GpsBridgeService : Service() {
         super.onCreate()
         repository = GpsBridgeRepository.getInstance(applicationContext)
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Ready to connect", GpsData()))
+        startForeground(NOTIFICATION_ID, buildNotification("Трансляция геопозиции активна", GpsData()))
         observeGpsData()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                repository.disconnect()
-                repository.setMockLocationActive(false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+                return START_NOT_STICKY
             }
             ACTION_START -> {
-                // Keep running in foreground
+                if (!repository.isMockLocationActive.value) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
             }
         }
         return START_STICKY
@@ -84,15 +87,20 @@ class GpsBridgeService : Service() {
     private fun observeGpsData() {
         serviceScope.launch {
             repository.gpsData.collectLatest { data ->
+                if (!repository.isMockLocationActive.value) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return@collectLatest
+                }
                 val status = repository.connectionStatus.value
                 val statusText = when (status) {
                     is ConnectionStatus.Connected -> {
                         val fixText = if (data.is3DFix) "3D Fix" else data.fixType.displayName
-                        "Connected (${status.deviceName}) • $fixText (Sats: ${data.satellitesUsed})"
+                        "Мок-локация активна • $fixText (Спутников: ${data.satellitesUsed})"
                     }
-                    is ConnectionStatus.Connecting -> "Connecting..."
-                    is ConnectionStatus.Disconnected -> "Disconnected"
-                    is ConnectionStatus.Error -> "Error: ${status.message}"
+                    is ConnectionStatus.Connecting -> "Подключение к источнику GNSS..."
+                    is ConnectionStatus.Disconnected -> "Ожидание подключения..."
+                    is ConnectionStatus.Error -> "Ошибка: ${status.message}"
                 }
                 updateNotification(statusText, data)
             }

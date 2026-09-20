@@ -1,18 +1,11 @@
 package ru.krasaev.taugpsbridge.ui
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,52 +18,90 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CompassCalibration
-import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Navigation
-import androidx.compose.material.icons.filled.NetworkCheck
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.SatelliteAlt
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import ru.krasaev.taugpsbridge.model.AntennaState
+import ru.krasaev.taugpsbridge.model.AntennaStatus
+import ru.krasaev.taugpsbridge.model.BackupPpsStatus
 import ru.krasaev.taugpsbridge.model.BackupState
 import ru.krasaev.taugpsbridge.model.ConnectionStatus
 import ru.krasaev.taugpsbridge.model.FixType
 import ru.krasaev.taugpsbridge.model.GpsData
 import ru.krasaev.taugpsbridge.model.InsDrState
 import ru.krasaev.taugpsbridge.model.InsInstallState
+import ru.krasaev.taugpsbridge.model.InsStatus
+import ru.krasaev.taugpsbridge.model.ModuleInfo
+import ru.krasaev.taugpsbridge.model.SatelliteSystemInfo
+import ru.krasaev.taugpsbridge.ui.theme.TAUGPSBridgeTheme
 import ru.krasaev.taugpsbridge.viewmodel.GpsUiState
+import java.util.Locale
 
 private val StatusGreen = Color(0xFF4CAF50)
 private val StatusYellow = Color(0xFFFFB300)
 private val StatusRed = Color(0xFFF44336)
 private val StatusGray = Color(0xFF9E9E9E)
+
+// ═══════════════════════════════════════════════════════════════
+//  Локально-независимые форматтеры (не зависят от Locale телефона)
+// ═══════════════════════════════════════════════════════════════
+
+private fun f1(v: Double?): String =
+    v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
+
+// ↓↓↓ ДОБАВИТЬ ЭТУ ПЕРЕГРУЗКУ ↓↓↓
+private fun f1(v: Float?): String =
+    v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
+// ↑↑↑
+
+private fun f2(v: Double?): String =
+    v?.let { String.format(Locale.US, "%.2f", it) } ?: "—"
+
+private fun f6(v: Double?): String =
+    v?.let { String.format(Locale.US, "%.6f", it) } ?: "—"
+
+// ═══════════════════════════════════════════════════════════════
+//  Агрегация спутников по системе
+//  (парсер хранит ключи "GPS_L1", "GPS_L5", "BDS_B1", ...)
+// ═══════════════════════════════════════════════════════════════
+
+private data class SystemAggregate(val count: Int, val cno: Double?)
+
+/**
+ * Возвращает агрегат по системе только из PRIMARY band,
+ * чтобы не задваивать L1 и L5 (это одни и те же физические спутники).
+ */
+private fun GpsData.systemAggregate(system: String): SystemAggregate {
+    val primaryKey = when (system) {
+        "GPS", "GLO", "QZSS" -> "${system}_L1"
+        "BDS" -> "BDS_B1"
+        "GAL" -> "GAL_E1"
+        else -> return SystemAggregate(0, null)
+    }
+    val info = satellitesBySystem[primaryKey] ?: return SystemAggregate(0, null)
+    return SystemAggregate(info.satCount, info.avgCno)
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Main screen
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 fun MainScreen(
@@ -85,172 +116,23 @@ fun MainScreen(
             .padding(horizontal = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-
-        // БЛОК 1: СОСТОЯНИЕ ПОДКЛЮЧЕНИЯ И ВЕРСИЯ МОДУЛЯ
-        item {
-            Block1ConnectionAndModule(uiState = uiState)
-        }
-
-        // БЛОК 2: GNSS-ФИКС И КООРДИНАТЫ
-        item {
-            Block2GnssFixAndCoordinates(gpsData = gpsData)
-        }
-
-        // БЛОК 3: СТАТУС INS (ИНЕРЦИАЛЬНОЙ СИСТЕМЫ) — ГЛАВНЫЙ БЛОК
-        item {
-            Block3InsStatus(gpsData = gpsData)
-        }
-
-        // БЛОК 4: СПУТНИКИ И КАЧЕСТВО ПРИЁМА
-        item {
-            Block4SatellitesAndQuality(gpsData = gpsData)
-        }
-
-        // БЛОК 5: АНТЕННА
-        item {
-            Block5Antenna(gpsData = gpsData)
-        }
-
-        // БЛОК 6: BACKUP И PPS
-        item {
-            Block6BackupAndPps(gpsData = gpsData)
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
-        }
+        item { Spacer(modifier = Modifier.height(4.dp)) }
+        item { SatellitesAndSignalBlock(gpsData = gpsData) }
+        item { CoordinatesAndMotionBlock(gpsData = gpsData) }
+        item { InsStatusBlock(gpsData = gpsData) }
+        item { Spacer(modifier = Modifier.height(16.dp)) }
     }
 }
 
 // =========================================================================
-// БЛОК 1: СОСТОЯНИЕ ПОДКЛЮЧЕНИЯ И ВЕРСИЯ МОДУЛЯ
+// 1. СПУТНИКИ И СИГНАЛ (ВКЛЮЧАЯ GNSS-ФИКС, DOP И АНТЕННУ)
 // =========================================================================
 @Composable
-private fun Block1ConnectionAndModule(uiState: GpsUiState) {
-    val status = uiState.connectionStatus
-    val moduleInfo = uiState.gpsData.moduleInfo
+private fun SatellitesAndSignalBlock(gpsData: GpsData) {
+    val overallCno = gpsData.overallAvgCno
+    val ant = gpsData.antennaStatus
+    val backup = gpsData.backupPpsStatus
 
-    val isConnected = status is ConnectionStatus.Connected
-    val isConnecting = status is ConnectionStatus.Connecting
-
-    val statusColor = when {
-        isConnected -> StatusGreen
-        isConnecting -> StatusYellow
-        else -> StatusRed
-    }
-
-    val statusText = when (status) {
-        is ConnectionStatus.Connected -> "USB подключён"
-        is ConnectionStatus.Connecting -> "Подключение к USB..."
-        is ConnectionStatus.Disconnected -> "Нет устройства"
-        is ConnectionStatus.Error -> "Ошибка: ${status.message}"
-    }
-
-    val portName = when (status) {
-        is ConnectionStatus.Connected -> status.deviceName
-        else -> uiState.selectedDeviceName ?: "Не выбрано"
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                StatusLed(color = statusColor)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "БЛОК 1: ПОДКЛЮЧЕНИЕ И МОДУЛЬ",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Bold,
-                    color = statusColor
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Port & Baud Rate
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Порт устройства", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(portName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Скорость", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${uiState.selectedBaudRate} бод", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Module Model & Firmware
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Модель модуля", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = moduleInfo.displayModel,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Прошивка", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = moduleInfo.displayFirmware,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Frequency Type
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val typeColor = when (moduleInfo.isDualFrequency) {
-                    true -> StatusGreen
-                    false -> StatusYellow
-                    null -> StatusGray
-                }
-                val typeEmoji = when (moduleInfo.isDualFrequency) {
-                    true -> "🟢"
-                    false -> "⚠️"
-                    null -> "⚪"
-                }
-                Text("Тип: ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    text = "$typeEmoji ${moduleInfo.typeDescription}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = typeColor
-                )
-            }
-        }
-    }
-}
-
-// =========================================================================
-// БЛОК 2: GNSS-ФИКС И КООРДИНАТЫ
-// =========================================================================
-@Composable
-private fun Block2GnssFixAndCoordinates(gpsData: GpsData) {
     val fixColor = when (gpsData.fixType) {
         FixType.RTK_FIXED, FixType.RTK_FLOAT, FixType.FIX_3D -> StatusGreen
         FixType.DGPS, FixType.FIX_2D -> StatusYellow
@@ -266,37 +148,62 @@ private fun Block2GnssFixAndCoordinates(gpsData: GpsData) {
         else -> if (gpsData.is3DFix) "3D Fix" else gpsData.fixType.displayName
     }
 
+    val cnoColor = when {
+        overallCno == null -> StatusGray
+        overallCno >= 30.0 -> StatusGreen
+        overallCno >= 25.0 -> StatusYellow
+        else -> StatusRed
+    }
+
+    val cnoQualityText = when {
+        overallCno == null -> "—"
+        overallCno > 40.0 -> "🟢 Отлично"
+        overallCno >= 30.0 -> "🟢 Хорошо"
+        overallCno >= 25.0 -> "🟡 Удовлетворительно"
+        overallCno >= 15.0 -> "🔴 Слабо"
+        else -> "🔴 Нет приёма"
+    }
+
+    val antColor = when (ant.state) {
+        AntennaState.OK -> StatusGreen
+        AntennaState.OPEN -> StatusYellow
+        AntennaState.SHORT -> StatusRed
+        AntennaState.UNKNOWN -> StatusGray
+    }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // Header with Large Fix Badge
+            // Header
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.SatelliteAlt,
+                    contentDescription = "Satellites",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "СПУТНИКИ И СИГНАЛ",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // GNSS Fix Status Badge & Satellite Counts directly below header
             Row(
-                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = "GNSS",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "БЛОК 2: GNSS-ФИКС И КООРДИНАТЫ",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                // Large Fix Badge
                 Surface(
-                    color = fixColor.copy(alpha = 0.2f),
+                    color = fixColor.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(20.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, fixColor)
                 ) {
@@ -308,11 +215,26 @@ private fun Block2GnssFixAndCoordinates(gpsData: GpsData) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = fixTitle,
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = fixColor
                         )
                     }
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "В поле зрения: ${gpsData.satellitesInView}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Используется: ${gpsData.satellitesUsed}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (gpsData.satellitesUsed > 0) StatusGreen else StatusGray
+                    )
                 }
             }
 
@@ -320,12 +242,181 @@ private fun Block2GnssFixAndCoordinates(gpsData: GpsData) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Lat & Lon in large clear numbers
+            // ─── АГРЕГ��ЦИЯ ПО СИСТЕМАМ ───
+            val gps = gpsData.systemAggregate("GPS")
+            val bds = gpsData.systemAggregate("BDS")
+            val glo = gpsData.systemAggregate("GLO")
+            val gal = gpsData.systemAggregate("GAL")
+
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f)) {
+                ConstellationStat(name = "GPS", count = gps.count, avgCno = gps.cno)
+                ConstellationStat(name = "BDS (Beidou)", count = bds.count, avgCno = bds.cno)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                ConstellationStat(name = "GLONASS", count = glo.count, avgCno = glo.cno)
+                ConstellationStat(name = "Galileo", count = gal.count, avgCno = gal.cno)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ─── СРЕДНИЙ C/N0 СИГНАЛ ───
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Средний сигнал (C/N0):",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = overallCno?.let { "${f1(it)} дБГц" } ?: "—",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = cnoColor
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "($cnoQualityText)",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ─── DOP ТОЧНОСТЬ (НА ОТДЕЛЬНОЙ СТРОКЕ) ───
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Точность (DOP):",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "PDOP: ${f1(gpsData.pdop)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "HDOP: ${f1(gpsData.hdop)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = "VDOP: ${f1(gpsData.vdop)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ─── АНТЕННА И ВРЕМЯ ФИКСА ───
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text("Состояние антенны", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusLed(color = antColor, size = 10.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = ant.state.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = antColor
+                        )
+                    }
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("Диапазон", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = if (ant.isDualBand) "L1 + L5 ✅" else "Только L1 ⚠️",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (ant.isDualBand) StatusGreen else StatusYellow
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text("L1 / L5 C/N0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = "L1: ${f1(ant.l1AvgCno)} дБГц  •  L5: ${f1(ant.l5AvgCno)} дБГц",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("Время 1-го фикса", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = backup.timeToFirstFixSeconds?.let { "$it с" } ?: "—",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 2. КООРДИНАТЫ И ДВИЖЕНИЕ
+// =========================================================================
+@Composable
+private fun CoordinatesAndMotionBlock(gpsData: GpsData) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.LocationOn,
+                    contentDescription = "Coordinates",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "КООРДИНАТЫ И ДВИЖЕНИЕ",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
                     Text("Широта (Latitude)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        text = gpsData.latitude?.let { "%.6f°".format(it) } ?: "—",
+                        text = gpsData.latitude?.let { "${f6(it)}°" } ?: "—",
                         style = MaterialTheme.typography.titleMedium,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
@@ -334,7 +425,7 @@ private fun Block2GnssFixAndCoordinates(gpsData: GpsData) {
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     Text("Долгота (Longitude)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        text = gpsData.longitude?.let { "%.6f°".format(it) } ?: "—",
+                        text = gpsData.longitude?.let { "${f6(it)}°" } ?: "—",
                         style = MaterialTheme.typography.titleMedium,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
@@ -344,38 +435,41 @@ private fun Block2GnssFixAndCoordinates(gpsData: GpsData) {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Altitude, Speed, Course
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TelemetryParam(title = "Высота", value = gpsData.altitudeMeters?.let { "%.1f м".format(it) } ?: "—")
-                TelemetryParam(title = "Скорость", value = gpsData.speedKmh?.let { "%.1f км/ч".format(it) } ?: "0.0 км/ч")
-                TelemetryParam(title = "Курс", value = gpsData.bearingDegrees?.let { "%.1f°".format(it) } ?: "—")
+                TelemetryParam(
+                    title = "Высота (MSL)",
+                    value = gpsData.altitudeMeters?.let { "${f1(it)} м" } ?: "—"
+                )
+                TelemetryParam(
+                    title = "Скорость",
+                    value = gpsData.speedKmh?.let { "${f1(it)} км/ч" } ?: "0.0 км/ч"
+                )
+                TelemetryParam(
+                    title = "Курс",
+                    value = gpsData.bearingDegrees?.let { "${f1(it)}°" } ?: "—"
+                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Sats in solution, HDOP, UTC time/date
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TelemetryParam(title = "Спутников в решении", value = "${gpsData.satellitesUsed}")
-                TelemetryParam(title = "HDOP", value = gpsData.hdop?.let { "%.2f".format(it) } ?: "—")
-                val timeDate = listOfNotNull(
-                    gpsData.utcTimeString.ifEmpty { null },
-                    gpsData.utcDateString.ifEmpty { null }
-                ).joinToString(" • ")
-                TelemetryParam(
-                    title = "UTC Время и Дата",
-                    value = if (timeDate.isNotEmpty()) timeDate else "—",
-                    alignEnd = true
-                )
-            }
+            val timeDate = listOfNotNull(
+                gpsData.utcTimeString.ifEmpty { null },
+                gpsData.utcDateString.ifEmpty { null }
+            ).joinToString(" • ")
+
+            TelemetryParam(
+                title = "UTC Время и Дата",
+                value = if (timeDate.isNotEmpty()) timeDate else "—"
+            )
         }
     }
 }
 
 // =========================================================================
-// БЛОК 3: СТАТУС INS (ИНЕРЦИАЛЬНОЙ СИСТЕМЫ) — ГЛАВНЫЙ БЛОК
+// 3. СТАТУС INS
 // =========================================================================
 @Composable
-private fun Block3InsStatus(gpsData: GpsData) {
+private fun InsStatusBlock(gpsData: GpsData) {
     val ins = gpsData.insStatus
 
     val drColor = when (ins.drState) {
@@ -392,48 +486,45 @@ private fun Block3InsStatus(gpsData: GpsData) {
         InsInstallState.UNKNOWN -> StatusGray
     }
 
-    // Emphasize with primaryContainer or prominent border
     Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(18.dp),
         border = androidx.compose.foundation.BorderStroke(2.dp, drColor),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Main Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.CompassCalibration,
-                        contentDescription = "INS",
-                        tint = drColor,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "🧭 БЛОК 3: СТАТУС INS (ГЛАВНЫЙ)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.CompassCalibration,
+                    contentDescription = "INS",
+                    tint = drColor,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "🧭 СТАТУС INS",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
 
-                Surface(
-                    color = drColor.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(12.dp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Surface(
+                color = drColor.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    StatusLed(color = drColor, size = 10.dp)
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = ins.drState.title,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = drColor,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        color = drColor
                     )
                 }
             }
@@ -442,7 +533,6 @@ private fun Block3InsStatus(gpsData: GpsData) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(12.dp))
 
-            // DR State & Installation State in 2 columns
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Режим DR (dr):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -459,7 +549,7 @@ private fun Block3InsStatus(gpsData: GpsData) {
                 }
 
                 Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                    Text("Калибровка установки (install):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Калибровка (install):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusLed(color = installColor, size = 12.dp)
                         Spacer(modifier = Modifier.width(6.dp))
@@ -475,7 +565,6 @@ private fun Block3InsStatus(gpsData: GpsData) {
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // User Recommendation Box
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(12.dp),
@@ -506,331 +595,6 @@ private fun Block3InsStatus(gpsData: GpsData) {
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-// =========================================================================
-// БЛОК 4: СПУТНИКИ И КАЧЕСТВО ПРИЁМА
-// =========================================================================
-@Composable
-private fun Block4SatellitesAndQuality(gpsData: GpsData) {
-    val overallCno = gpsData.overallAvgCno
-
-    val cnoColor = when {
-        overallCno == null -> StatusGray
-        overallCno > 40.0 -> StatusGreen
-        overallCno >= 30.0 -> StatusGreen
-        overallCno >= 25.0 -> StatusYellow
-        overallCno >= 15.0 -> StatusRed
-        else -> StatusRed
-    }
-
-    val cnoQualityText = when {
-        overallCno == null -> "—"
-        overallCno > 40.0 -> "🟢 Отлично"
-        overallCno >= 30.0 -> "🟢 Хорошо"
-        overallCno >= 25.0 -> "🟡 Удовлетворительно"
-        overallCno >= 15.0 -> "🔴 Слабо"
-        else -> "🔴 Нет приёма"
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.SatelliteAlt,
-                        contentDescription = "Satellites",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "БЛОК 4: СПУТНИКИ И СИГНАЛ",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                Text(
-                    text = "Всего в поле: ${gpsData.satellitesInView}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Constellations grid
-            val gps = gpsData.satellitesBySystem["GPS"]
-            val bds = gpsData.satellitesBySystem["BDS"]
-            val glo = gpsData.satellitesBySystem["GLONASS"]
-            val gal = gpsData.satellitesBySystem["Galileo"]
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                ConstellationStat(name = "GPS", count = gps?.satCount ?: 0, avgCno = gps?.avgCno)
-                ConstellationStat(name = "BDS (Beidou)", count = bds?.satCount ?: 0, avgCno = bds?.avgCno)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                ConstellationStat(name = "GLONASS", count = glo?.satCount ?: 0, avgCno = glo?.avgCno)
-                ConstellationStat(name = "Galileo", count = gal?.satCount ?: 0, avgCno = gal?.avgCno)
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Average C/N0 bar & DOPs
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text("Средний C/N0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = overallCno?.let { "%.1f дБГц".format(it) } ?: "—",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = cnoColor
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "($cnoQualityText)",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("DOP (Точность)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = "P: ${gpsData.pdop?.let { "%.1f".format(it) } ?: "—"}  H: ${gpsData.hdop?.let { "%.1f".format(it) } ?: "—"}  V: ${gpsData.vdop?.let { "%.1f".format(it) } ?: "—"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            }
-        }
-    }
-}
-
-// =========================================================================
-// БЛОК 5: АНТЕННА
-// =========================================================================
-@Composable
-private fun Block5Antenna(gpsData: GpsData) {
-    val ant = gpsData.antennaStatus
-
-    val antColor = when (ant.state) {
-        AntennaState.OK -> StatusGreen
-        AntennaState.OPEN -> StatusYellow
-        AntennaState.SHORT -> StatusRed
-        AntennaState.UNKNOWN -> StatusGray
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Radio,
-                    contentDescription = "Antenna",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "БЛОК 5: АНТЕННА",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Antenna State & Band
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Тип антенны", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusLed(color = antColor, size = 10.dp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = ant.state.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = antColor
-                        )
-                    }
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Диапазон", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = if (ant.isDualBand) "L1 + L5 ✅" else "Только L1 ⚠️",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (ant.isDualBand) StatusGreen else StatusYellow
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // L1 & L5 C/N0 values
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column {
-                    Text("L1 C/N0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = ant.l1AvgCno?.let { "%.1f дБГц".format(it) } ?: "—",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("L5 C/N0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = ant.l5AvgCno?.let { "%.1f дБГц".format(it) } ?: "—",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
-    }
-}
-
-// =========================================================================
-// БЛОК 6: BACKUP И PPS
-// =========================================================================
-@Composable
-private fun Block6BackupAndPps(gpsData: GpsData) {
-    val backup = gpsData.backupPpsStatus
-
-    val backupColor = when (backup.backupState) {
-        BackupState.HOT_START -> StatusGreen
-        BackupState.WARM_START -> StatusYellow
-        BackupState.COLD_START -> StatusRed
-        BackupState.WAITING, BackupState.UNKNOWN -> StatusGray
-    }
-
-    // PPS Blinking animation
-    val infiniteTransition = rememberInfiniteTransition(label = "pps")
-    val alphaAnim by infiniteTransition.animateFloat(
-        initialValue = 0.2f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(500),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "ppsAlpha"
-    )
-
-    val isPpsActive = backup.isPpsActive && (System.currentTimeMillis() - backup.lastPpsTimestampMillis < 2500)
-    val ppsAlpha = if (isPpsActive) alphaAnim else 0.3f
-    val ppsColor = if (isPpsActive) StatusGreen else StatusRed
-    val ppsText = if (isPpsActive) "PPS активен (1 Гц)" else "PPS нет"
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.BatteryChargingFull,
-                    contentDescription = "Backup",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "БЛОК 6: BACKUP И PPS",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Backup status & PPS Indicator
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Батарейка Backup", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        StatusLed(color = backupColor, size = 10.dp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = backup.backupState.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = backupColor
-                        )
-                    }
-                    if (backup.timeToFirstFixSeconds != null) {
-                        Text(
-                            text = "Время 1-го фикса: ${backup.timeToFirstFixSeconds} с",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Сигнал PPS (1 сек)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(12.dp)
-                                .alpha(ppsAlpha)
-                                .clip(CircleShape)
-                                .background(ppsColor)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = ppsText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = ppsColor
                         )
                     }
                 }
@@ -871,9 +635,97 @@ private fun ConstellationStat(name: String, count: Int, avgCno: Double?) {
     Column {
         Text(name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
-            text = "$count сп. ${avgCno?.let { "(%.1f dB)".format(it) } ?: ""}",
+            text = if (count > 0)
+                "$count сп. ${avgCno?.let { "(${f1(it)} dB)" } ?: ""}"
+            else
+                "0 сп.",
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            color = if (count > 0) MaterialTheme.colorScheme.onSurface else StatusGray
+        )
+    }
+}
+
+// =========================================================================
+// PREVIEWS
+// =========================================================================
+@Preview(name = "Light Mode - Connected", showBackground = true)
+@Preview(name = "Dark Mode - Connected", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun MainScreenPreview() {
+    TAUGPSBridgeTheme {
+        MainScreen(
+            uiState = GpsUiState(
+                connectionStatus = ConnectionStatus.Connected(deviceName = "ttyUSB0", baudRate = 115200),
+                selectedDeviceName = "ttyUSB0",
+                selectedBaudRate = 115200,
+                gpsData = GpsData(
+                    latitude = 55.751244,
+                    longitude = 37.618423,
+                    altitudeMeters = 156.4,
+                    speedKmh = 64.2,
+                    bearingDegrees = 128.5f,
+                    satellitesUsed = 24,
+                    satellitesInView = 32,
+                    hdop = 0.82f,
+                    pdop = 1.34f,
+                    vdop = 1.05f,
+                    fixType = FixType.RTK_FIXED,
+                    ggaQuality = 4,
+                    is3DFix = true,
+                    utcTimeString = "14:28:45 UTC",
+                    utcDateString = "20.09.2026",
+                    overallAvgCno = 38.5,
+                    moduleInfo = ModuleInfo(
+                        swVersion = "3.M8C.4e08c7",
+                        hwVersion = "HD8040DF.017747a",
+                        isDualFrequency = true,
+                        isDetected = true
+                    ),
+                    insStatus = InsStatus(
+                        rawDr = "A",
+                        rawInstall = "3",
+                        drState = InsDrState.ACTIVE,
+                        installState = InsInstallState.FULL_READY,
+                        recommendation = "INS полностью откалибрована и работает в штатном режиме."
+                    ),
+                    // Ключи должны совпадать с парсером: "GPS_L1", "BDS_B1", "GLO_L1", "GAL_E1"
+                    satellitesBySystem = mapOf(
+                        "GPS_L1" to SatelliteSystemInfo("GPS_L1", 10, 39.2),
+                        "GPS_L5" to SatelliteSystemInfo("GPS_L5", 7, 36.5),
+                        "BDS_B1" to SatelliteSystemInfo("BDS_B1", 8, 38.0),
+                        "BDS_B2a" to SatelliteSystemInfo("BDS_B2a", 4, 35.1),
+                        "GLO_L1" to SatelliteSystemInfo("GLO_L1", 4, 35.5),
+                        "GAL_E1" to SatelliteSystemInfo("GAL_E1", 2, 36.1)
+                    ),
+                    antennaStatus = AntennaStatus(
+                        state = AntennaState.OK,
+                        isDualBand = true,
+                        l1AvgCno = 39.5,
+                        l5AvgCno = 37.2
+                    ),
+                    backupPpsStatus = BackupPpsStatus(
+                        backupState = BackupState.HOT_START,
+                        timeToFirstFixSeconds = 2L,
+                        isPpsActive = true,
+                        lastPpsTimestampMillis = System.currentTimeMillis()
+                    )
+                )
+            )
+        )
+    }
+}
+
+@Preview(name = "Disconnected State", showBackground = true)
+@Composable
+fun MainScreenDisconnectedPreview() {
+    TAUGPSBridgeTheme {
+        MainScreen(
+            uiState = GpsUiState(
+                connectionStatus = ConnectionStatus.Disconnected,
+                selectedDeviceName = null,
+                gpsData = GpsData()
+            )
         )
     }
 }

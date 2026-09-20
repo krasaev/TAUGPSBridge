@@ -3,6 +3,7 @@ package ru.krasaev.taugpsbridge.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Configuration
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -64,8 +65,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.krasaev.taugpsbridge.ui.theme.TAUGPSBridgeTheme
 import ru.krasaev.taugpsbridge.viewmodel.GpsUiState
 import ru.krasaev.taugpsbridge.viewmodel.GpsViewModel
 
@@ -89,11 +92,36 @@ private val COMMAND_PRESETS = listOf(
     PresetCommand("Включить все NMEA", "\$PCAS03,1,1,1,1,1,1,1,1,0,0,,,0,0*02", "GGA, GLL, GSA, GSV, RMC, VTG, ZDA, TXT")
 )
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+/**
+ * Stateful wrapper connecting ViewModel to the UI.
+ */
 @Composable
 fun LogsScreen(
     viewModel: GpsViewModel,
     uiState: GpsUiState,
+    modifier: Modifier = Modifier
+) {
+    LogsScreenContent(
+        uiState = uiState,
+        onCommandInputChanged = viewModel::onCommandInputChanged,
+        onSendCommand = { viewModel.sendCommand() },
+        onToggleLogging = viewModel::toggleLogging,
+        onClearLogs = viewModel::clearLogs,
+        modifier = modifier
+    )
+}
+
+/**
+ * Stateless UI composable for Logs and Commands screen.
+ */
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun LogsScreenContent(
+    uiState: GpsUiState,
+    onCommandInputChanged: (String) -> Unit,
+    onSendCommand: () -> Unit,
+    onToggleLogging: () -> Unit,
+    onClearLogs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -167,7 +195,7 @@ fun LogsScreen(
                 ) {
                     OutlinedTextField(
                         value = uiState.commandInput,
-                        onValueChange = { viewModel.onCommandInputChanged(it) },
+                        onValueChange = onCommandInputChanged,
                         placeholder = { Text("Введите NMEA или HEX...", style = MaterialTheme.typography.bodySmall) },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
@@ -177,7 +205,7 @@ fun LogsScreen(
                         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                         trailingIcon = {
                             if (uiState.commandInput.isNotEmpty()) {
-                                IconButton(onClick = { viewModel.onCommandInputChanged("") }) {
+                                IconButton(onClick = { onCommandInputChanged("") }) {
                                     Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(18.dp))
                                 }
                             }
@@ -187,7 +215,7 @@ fun LogsScreen(
                     Spacer(modifier = Modifier.width(8.dp))
 
                     Button(
-                        onClick = { viewModel.sendCommand() },
+                        onClick = onSendCommand,
                         enabled = uiState.commandInput.isNotBlank(),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.height(56.dp)
@@ -217,7 +245,7 @@ fun LogsScreen(
                                 FilterChip(
                                     selected = uiState.commandInput == preset.command,
                                     onClick = {
-                                        viewModel.onCommandInputChanged(preset.command)
+                                        onCommandInputChanged(preset.command)
                                         isPresetsExpanded = false
                                     },
                                     label = {
@@ -237,7 +265,7 @@ fun LogsScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         // =========================================================================
-        // НИЖНЯЯ ЧАСТЬ: ТЕРМИНАЛ ЛОГОВ С КНОПКАМИ СТАРТ / ПАУЗА / КОПИРОВАНИЕ
+        // НИЖНЯЯ ЧАСТЬ: ТЕРМИНАЛ ЛОГОВ С КНОПКАМИ СТАРТ / ПАУЗА / КОПИРОВАНИЕ / СТЕРЕТЬ
         // =========================================================================
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -247,82 +275,112 @@ fun LogsScreen(
                 .weight(1f)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
-                // Header & Action Controls
+                // Status Header Row
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "ТЕРМИНАЛ ЛОГОВ",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    Surface(
+                        color = if (uiState.isLoggingEnabled) Color(0xFF4CAF50).copy(alpha = 0.15f) else Color(0xFFFFB300).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
                         Text(
-                            text = if (uiState.isLoggingEnabled) "🟢 Логирование активно" else "⏸️ Логирование на паузе",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = if (uiState.isLoggingEnabled) "🟢 Активно" else "⏸️ На паузе",
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = if (uiState.isLoggingEnabled) Color(0xFF4CAF50) else Color(0xFFFFB300)
+                            color = if (uiState.isLoggingEnabled) Color(0xFF4CAF50) else Color(0xFFFFB300),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Action Controls Toolbar (Full width, clearly visible buttons)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Start / Pause button
+                    Button(
+                        onClick = onToggleLogging,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (uiState.isLoggingEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (uiState.isLoggingEnabled) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (uiState.isLoggingEnabled) "Pause" else "Start",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (uiState.isLoggingEnabled) "Пауза" else "Старт",
+                            style = MaterialTheme.typography.labelSmall
                         )
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        // Start / Pause button
-                        Button(
-                            onClick = { viewModel.toggleLogging() },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (uiState.isLoggingEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (uiState.isLoggingEnabled) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (uiState.isLoggingEnabled) "Pause" else "Start",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = if (uiState.isLoggingEnabled) "Пауза" else "Старт",
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                    // Copy button
+                    OutlinedButton(
+                        onClick = {
+                            if (uiState.logs.isNotEmpty()) {
+                                val fullLogText = uiState.logs.joinToString("\n")
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("TAU GPS Logs", fullLogText)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, "Логи скопированы (${uiState.logs.size} строк)", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Логи пусты", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Копировать", style = MaterialTheme.typography.labelSmall)
+                    }
 
-                        // Copy button
-                        OutlinedButton(
-                            onClick = {
-                                if (uiState.logs.isNotEmpty()) {
-                                    val fullLogText = uiState.logs.joinToString("\n")
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = ClipData.newPlainText("TAU GPS Logs", fullLogText)
-                                    clipboard.setPrimaryClip(clip)
-                                    Toast.makeText(context, "Логи скопированы (${uiState.logs.size} строк)", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Логи пусты", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ContentCopy,
-                                contentDescription = "Copy",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Копировать", style = MaterialTheme.typography.labelSmall)
-                        }
-
-                        // Clear button
-                        IconButton(
-                            onClick = { viewModel.clearLogs() },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Clear",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                    // Clear button ("Стереть")
+                    OutlinedButton(
+                        onClick = {
+                            onClearLogs()
+                            Toast.makeText(context, "Логи очищены", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Стереть",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Стереть", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 
@@ -363,6 +421,7 @@ fun LogsScreen(
                                 val textColor = when {
                                     log.startsWith("TX") -> Color(0xFF64B5F6) // Blue
                                     log.startsWith("RX [VERSION]") -> Color(0xFF81C784) // Light green
+                                    log.startsWith("RX [HEX]") -> Color(0xFFFFB74D) // Orange for HEX data
                                     log.startsWith("RX") -> Color(0xFFE0E0E0) // Light gray
                                     log.contains("Error", ignoreCase = true) || log.contains("Ошибка", ignoreCase = true) -> Color(0xFFE57373) // Red
                                     log.startsWith("[СИСТЕМА]") -> Color(0xFFFFD54F) // Yellow
@@ -382,5 +441,51 @@ fun LogsScreen(
                 }
             }
         }
+    }
+}
+
+// =========================================================================
+// PREVIEWS
+// =========================================================================
+@Preview(name = "Logs Screen - Light", showBackground = true)
+@Preview(name = "Logs Screen - Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun LogsScreenPreview() {
+    TAUGPSBridgeTheme {
+        LogsScreenContent(
+            uiState = GpsUiState(
+                isLoggingEnabled = true,
+                commandInput = "\$PCAS04,1*18",
+                logs = listOf(
+                    "[СИСТЕМА] Подключение к порту ttyUSB0 (115200 бод)...",
+                    "TX: \$PCAS04,1*18",
+                    "RX: \$GNGGA,142845.00,5545.0746,N,03737.1054,E,4,24,0.82,156.4,M,14.2,M,,*4A",
+                    "RX: \$GNRMC,142845.00,A,5545.0746,N,03737.1054,E,34.6,128.5,200926,,,D*7F",
+                    "RX [VERSION]: TAU1201-DR SW:V2.3.1 HW:1.0"
+                )
+            ),
+            onCommandInputChanged = {},
+            onSendCommand = {},
+            onToggleLogging = {},
+            onClearLogs = {}
+        )
+    }
+}
+
+@Preview(name = "Logs Screen - Empty State", showBackground = true)
+@Composable
+fun LogsScreenEmptyPreview() {
+    TAUGPSBridgeTheme {
+        LogsScreenContent(
+            uiState = GpsUiState(
+                isLoggingEnabled = false,
+                commandInput = "",
+                logs = emptyList()
+            ),
+            onCommandInputChanged = {},
+            onSendCommand = {},
+            onToggleLogging = {},
+            onClearLogs = {}
+        )
     }
 }

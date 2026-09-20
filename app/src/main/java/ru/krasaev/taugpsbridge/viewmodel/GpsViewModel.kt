@@ -9,20 +9,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ru.krasaev.taugpsbridge.model.BluetoothDeviceInfo
 import ru.krasaev.taugpsbridge.model.ConnectionStatus
+import ru.krasaev.taugpsbridge.model.ConnectionType
 import ru.krasaev.taugpsbridge.model.GpsData
 import ru.krasaev.taugpsbridge.model.UsbDeviceInfo
 import ru.krasaev.taugpsbridge.service.GpsBridgeRepository
-import ru.krasaev.taugpsbridge.service.GpsBridgeService
 
 data class GpsUiState(
     val gpsData: GpsData = GpsData(),
+    val connectionType: ConnectionType = ConnectionType.USB,
     val connectionStatus: ConnectionStatus = ConnectionStatus.Disconnected,
     val isMockLocationActive: Boolean = false,
     val mockLocationError: String? = null,
     val generalError: String? = null,
     val availableDevices: List<UsbDeviceInfo> = emptyList(),
+    val availableBluetoothDevices: List<BluetoothDeviceInfo> = emptyList(),
     val selectedDeviceName: String? = null,
+    val selectedBluetoothAddress: String? = null,
     val selectedBaudRate: Int = 115200,
     val selectedCommandEnding: String = "\r\n",
     val commandInput: String = "",
@@ -39,6 +43,13 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<GpsUiState> = _uiState.asStateFlow()
 
     init {
+        // Collect Connection Type
+        viewModelScope.launch {
+            repository.selectedConnectionType.collectLatest { type ->
+                _uiState.update { it.copy(connectionType = type) }
+            }
+        }
+
         // Collect GPS Data
         viewModelScope.launch {
             repository.gpsData.collectLatest { data ->
@@ -74,10 +85,17 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Collect Available Devices
+        // Collect Available USB Devices
         viewModelScope.launch {
             repository.availableDevices.collectLatest { devices ->
                 _uiState.update { it.copy(availableDevices = devices) }
+            }
+        }
+
+        // Collect Available Bluetooth Devices
+        viewModelScope.launch {
+            repository.availableBluetoothDevices.collectLatest { btDevices ->
+                _uiState.update { it.copy(availableBluetoothDevices = btDevices) }
             }
         }
 
@@ -113,6 +131,12 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         scanDevices()
+        scanBluetoothDevices()
+    }
+
+    fun selectConnectionType(type: ConnectionType) {
+        repository.selectConnectionType(type)
+        _uiState.update { it.copy(connectionType = type) }
     }
 
     fun scanDevices() {
@@ -125,11 +149,31 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun scanBluetoothDevices() {
+        val list = repository.scanBluetoothDevices()
+        _uiState.update {
+            it.copy(
+                availableBluetoothDevices = list,
+                selectedBluetoothAddress = repository.selectedBluetoothAddress.value
+            )
+        }
+    }
+
     fun selectAndConnectDevice(device: UsbDeviceInfo) {
         repository.selectAndConnectDevice(device)
         _uiState.update {
             it.copy(
                 selectedDeviceName = device.deviceName,
+                isServiceRunning = true
+            )
+        }
+    }
+
+    fun selectAndConnectBluetoothDevice(device: BluetoothDeviceInfo) {
+        repository.selectAndConnectBluetoothDevice(device)
+        _uiState.update {
+            it.copy(
+                selectedBluetoothAddress = device.address,
                 isServiceRunning = true
             )
         }
@@ -163,7 +207,6 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun connect() {
-        GpsBridgeService.startService(getApplication())
         repository.connect()
         _uiState.update { it.copy(isServiceRunning = true) }
     }
@@ -174,10 +217,7 @@ class GpsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleMockLocation(enable: Boolean) {
-        val success = repository.setMockLocationActive(enable)
-        if (enable && success) {
-            GpsBridgeService.startService(getApplication())
-        }
+        repository.setMockLocationActive(enable)
     }
 
     fun sendCommand(customCommand: String? = null) {

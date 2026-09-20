@@ -120,6 +120,20 @@ data class GpsData(
     val rawSentence: String = ""
 )
 
+enum class ConnectionType(val title: String) {
+    USB("USB"),
+    BLUETOOTH("Bluetooth")
+}
+
+data class BluetoothDeviceInfo(
+    val name: String,
+    val address: String,
+    val isBonded: Boolean = true
+) {
+    val displayName: String
+        get() = if (name.isNotBlank()) "$name ($address)" else address
+}
+
 data class UsbDeviceInfo(
     val deviceName: String,
     val vendorId: Int,
